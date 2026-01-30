@@ -3,6 +3,8 @@
 Local-first **4-agent AI council** (Security, Ethics, Code, Arbiter) with **Christian ethics** + **prompt-injection defenses**,
 RAG via **Redis Stack**, and **human approval via Telegram (free)** or optional Twilio.
 
+!(ScreenShot)(https://hostr.co/file/970/PujElsbkitOC/ChatGPTImageJan30202602_59_40AM.png)
+
 ## What it does
 
 - Accepts a *request* + a *proposed execution plan*.
