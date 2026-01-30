@@ -3,8 +3,6 @@
 Local-first **4-agent AI council** (Security, Ethics, Code, Arbiter) with **Christian ethics** + **prompt-injection defenses**,
 RAG via **Redis Stack**, and **human approval via Telegram (free)** or optional Twilio.
 
-![ScreenShot](https://hostr.co/file/970/PujElsbkitOC/ChatGPTImageJan30202602_59_40AM.png)
-
 ## What it does
 
 - Accepts a *request* + a *proposed execution plan*.
@@ -282,3 +280,86 @@ The tray app now has a checkbox: **Dry run (preview only, no execution)**.
 
 To actually execute, resend the same request with `dry_run: false`.
 
+
+
+
+## News → Signals → (Paper) Investing Proposals (NEW)
+
+This package adds an automated RSS news poller that:
+
+- Polls `app/news_sources.txt` every `NEWS_POLL_INTERVAL_SECONDS`
+- Indexes each new article into the Redis Vector RAG as `doc:news:<id>` so it can be referenced in later prompts
+- Generates a cautious *paper-trade-only* proposal and sends a Telegram message with a **dry run preview**
+- Keeps execution gated: paper trades only execute after the normal approval flow, and `paper_trade` actions can require a manual quote confirmation
+
+### Environment variables
+
+- `NEWS_POLL_INTERVAL_SECONDS` (default: `900`)
+- `NEWS_MAX_ITEMS_PER_POLL` (default: `25`)
+- `NEWS_ENABLE_MARKET_HOURS_ONLY` (default: `0`)
+- `NEWS_WATCHLIST` (optional comma-separated tickers, e.g. `AAPL,TSLA,NVDA`)
+- `NEWS_SOURCES_FILE` (default: `app/news_sources.txt`)
+- `PAPER_START_CASH` (default: `100000`)
+
+### Editing the feeds
+
+Edit `app/news_sources.txt` (one RSS URL per line). Restart the API container/service for changes to apply.
+
+### Enabling execution of paper trades
+
+The poller creates proposals in **dry run** mode by default. To actually execute a trade you must:
+
+1) Create a plan with `dry_run=false` and a `paper_trade` action that includes a real price, and
+2) If `requires_quote=true`, set `price_confirmed=true` before approving (prevents placeholder execution).
+
+
+
+## Live trading (optional) via Alpaca
+
+This repo now supports a **real broker order action** (still behind the existing approval gate).
+
+### Configure Alpaca
+Set these in your `.env`:
+
+- `TRADING_BROKER=alpaca`
+- `ALPACA_API_KEY=...`
+- `ALPACA_API_SECRET=...`
+- `ALPACA_PAPER=1` for paper trading, or `ALPACA_PAPER=0` for live trading
+- Optional: `ALPACA_BASE_URL=` (leave blank to use Alpaca defaults)
+
+### Action: `alpaca_order`
+Example (paper, dry run):
+
+```json
+{
+  "action_request": "Buy 1 share of AAPL (paper)",
+  "proposed_plan": {
+    "type": "trading",
+    "actions": [
+      {
+        "name": "alpaca_order",
+        "broker_mode": "paper",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1,
+        "order_type": "market",
+        "time_in_force": "day"
+      }
+    ]
+  },
+  "dry_run": true
+}
+```
+
+### Safety rails
+- Orders **only execute** when the plan is approved (same `YES <code>` flow).
+- Live orders additionally require: `broker_mode="live"` **and** `confirm_live_trade=true`.
+- The code rejects mode mismatches (`ALPACA_PAPER` vs `broker_mode`).
+
+
+
+### News trading proposals (paper + live)
+
+- Set `TRADING_BROKER=alpaca` to include Alpaca order proposals.
+- Set `NEWS_PROPOSE_LIVE=1` to include an additional **LIVE** Alpaca order proposal in each signal.
+  - Live proposals **never auto-confirm**; execution requires your usual YES approval **and** `confirm_live_trade=true`.

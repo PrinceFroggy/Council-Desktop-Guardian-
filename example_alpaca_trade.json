@@ -1,0 +1,19 @@
+{
+  "action_request": "Place a small MARKET BUY order for AAPL using Alpaca (paper or live depending on env).",
+  "proposed_plan": {
+    "type": "trading",
+    "actions": [
+      {
+        "name": "alpaca_order",
+        "broker_mode": "paper",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1,
+        "order_type": "market",
+        "time_in_force": "day",
+        "extended_hours": false
+      }
+    ]
+  },
+  "dry_run": true
+}
