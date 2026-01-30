@@ -1,0 +1,18 @@
+{
+  "action_request": "Fetch a webpage and then list files in repo root using shell.",
+  "proposed_plan": {
+    "type": "desktop",
+    "actions": [
+      {
+        "name": "web_fetch",
+        "url": "https://hnrss.org/frontpage"
+      },
+      {
+        "name": "shell_exec",
+        "cmd": "ls -la",
+        "timeout_seconds": 30
+      }
+    ]
+  },
+  "rag_mode": "cag"
+}

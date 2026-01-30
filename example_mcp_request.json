@@ -1,0 +1,21 @@
+{
+  "action_request": "Use MCP to read README.md, then take a screenshot.",
+  "proposed_plan": {
+    "type": "desktop",
+    "actions": [
+      {
+        "name": "mcp_call",
+        "server": "example_stdio",
+        "tool": "filesystem.read_file",
+        "args": {
+          "path": "README.md"
+        }
+      },
+      {
+        "name": "screenshot",
+        "path": "after.png"
+      }
+    ]
+  },
+  "rag_mode": "advanced"
+}

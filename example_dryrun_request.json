@@ -1,0 +1,18 @@
+{
+  "action_request": "Preview: take screenshot and type hello",
+  "proposed_plan": {
+    "type": "desktop",
+    "actions": [
+      {
+        "name": "screenshot",
+        "path": "shot.png"
+      },
+      {
+        "name": "type_text",
+        "text": "hello"
+      }
+    ]
+  },
+  "rag_mode": "advanced",
+  "dry_run": true
+}

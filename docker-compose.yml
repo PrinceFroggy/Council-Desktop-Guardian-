@@ -1,0 +1,31 @@
+services:
+  redis:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data
+
+  guardian:
+    build: .
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REPO_PATH=${REPO_PATH:-/repo}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:7070}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_FROM=${TWILIO_FROM}
+      - APPROVER_PHONE=${APPROVER_PHONE}
+    ports:
+      - "7070:7070"
+    volumes:
+      - ${REPO_PATH:-.}:/repo
+
+volumes:
+  redis_data:

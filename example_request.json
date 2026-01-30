@@ -1,0 +1,18 @@
+{
+  "action_request": "Take a screenshot and then type 'Hello from the council' in the currently focused field.",
+  "proposed_plan": {
+    "type": "desktop",
+    "actions": [
+      {
+        "name": "screenshot",
+        "path": "screenshot.png"
+      },
+      {
+        "name": "type_text",
+        "text": "Hello from the council",
+        "interval": 0.02
+      }
+    ]
+  },
+  "rag_mode": "advanced"
+}
