@@ -1,0 +1,16 @@
+{
+  "servers": [
+    {
+      "name": "example_stdio",
+      "transport": "stdio",
+      "command": [
+        "python",
+        "-m",
+        "your_mcp_server_module"
+      ],
+      "env": {},
+      "timeout_seconds": 20
+    }
+  ],
+  "allowlisted_tools": []
+}

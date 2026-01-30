@@ -1,0 +1,4 @@
+# RSS sources for daily research (edit freely)
+https://hnrss.org/frontpage
+https://feeds.arstechnica.com/arstechnica/index
+https://www.technologyreview.com/feed/
