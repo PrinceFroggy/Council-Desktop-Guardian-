@@ -1,0 +1,6 @@
+# RSS feeds for trading/news poller (one URL per line)
+# You can add/remove feeds. Keep it small to avoid rate limits.
+https://feeds.a.dj.com/rss/RSSMarketsMain.xml
+https://www.investing.com/rss/news_25.rss
+https://www.marketwatch.com/rss/topstories
+https://www.cnbc.com/id/100003114/device/rss/rss.html

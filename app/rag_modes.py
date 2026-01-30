@@ -28,7 +28,7 @@ def _rerank(llm_provider, model: str, query: str, chunks: List[Dict[str, Any]], 
         "query": query,
         "candidates": [{"i": i, "path": c["path"], "snippet": c["content"][:300]} for i, c in enumerate(chunks)]
     }
-    system = "Select the best candidates for answering the query. Output JSON: {"ranked":[indices...]}"
+    system = 'Select the best candidates for answering the query. Output JSON with key "ranked" containing indices, e.g. {"ranked":[0,2,1]}'
     try:
         raw = llm_provider.chat(system, json.dumps(prompt, ensure_ascii=False), model)
         start, end = raw.find("{"), raw.rfind("}")
@@ -63,7 +63,7 @@ def graphrag(rag: RAG, redis_client, query: str, k: int = 6) -> Dict[str, Any]:
 
 def agentic_rag(rag: RAG, llm_provider, model: str, query: str) -> Dict[str, Any]:
     # A simple multi-step retrieval plan: the LLM proposes sub-queries, we retrieve for each.
-    system = "Break the task into 2-4 focused retrieval queries for a codebase. Output JSON: {"subqueries":[...]}."
+    system = 'Break the task into 2-4 focused retrieval queries for a codebase. Output JSON like {"subqueries":["...","..."]}.'
     subqueries = [query]
     try:
         raw = llm_provider.chat(system, query, model)

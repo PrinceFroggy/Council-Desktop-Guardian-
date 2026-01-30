@@ -43,7 +43,7 @@ except Exception:
 
 # Start daily research + reflection (Telegram)
 try:
-    start_scheduler(providers["ollama"], "llama3.1:8b")
+    start_scheduler(rag, r, providers, council)
 except Exception:
     pass
 
@@ -177,10 +177,11 @@ def execute(pending_id: str):
         return {"error": f"not approved (status={blob['status']})"}
 
     plan = blob.get("proposed_plan") or {}
-    if plan.get("type") != "desktop":
+    plan_type = plan.get("type") or "desktop"
+    if plan_type not in ("desktop", "trading"):
         blob["status"] = "DENIED"
         r.set(pending_id.encode(), json.dumps(blob).encode())
-        return {"error": "Only desktop plans are wired in this template."}
+        return {"error": f"Unsupported plan type: {plan_type}"}
 
     results = []
     for act in plan.get("actions", []):
@@ -232,6 +233,74 @@ def execute(pending_id: str):
             })
             # store content separately to avoid bloating telegram
             blob.setdefault("web_pages", []).append(res)
+            continue
+
+        if act.get("name") == "paper_trade":
+            from .trading import apply_paper_trade
+            ticker = act.get("ticker") or ""
+            side = act.get("side") or ""
+            qty = act.get("qty") or 0
+            price = act.get("price") or 0
+            if act.get("requires_quote") and not act.get("price_confirmed"):
+                results.append("paper_trade DENIED: requires_quote=true. Re-plan with a real quote price and price_confirmed=true.")
+                blob.setdefault("trade_errors", []).append({"ticker": ticker, "error": "requires_quote"})
+                continue
+            res = apply_paper_trade(r, ticker=ticker, side=side, qty=qty, price=price, start_cash=settings.PAPER_START_CASH)
+            results.append("paper_trade OK" if res.get("ok") else f"paper_trade ERROR: {res.get('error')}")
+            blob.setdefault("paper_trades", []).append(res)
+            continue
+
+
+        if act.get("name") == "alpaca_order":
+            # Real order via Alpaca Trading API (still behind your approval gate)
+            if settings.TRADING_BROKER.lower() != "alpaca":
+                results.append("alpaca_order DENIED: TRADING_BROKER is not alpaca")
+                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"broker_disabled"})
+                continue
+            # Prevent accidental live trades: require explicit confirmation flags
+            broker_mode = (act.get("broker_mode") or ("paper" if settings.ALPACA_PAPER else "live")).lower()
+            if broker_mode not in ("paper","live"):
+                results.append("alpaca_order DENIED: broker_mode must be paper|live")
+                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"bad_broker_mode"})
+                continue
+            if broker_mode == "live":
+                if not act.get("confirm_live_trade"):
+                    results.append("alpaca_order DENIED: missing confirm_live_trade=true")
+                    blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"live_not_confirmed"})
+                    continue
+                # Also ensure env is configured for live or explicitly overridden
+                if settings.ALPACA_PAPER:
+                    results.append("alpaca_order DENIED: ALPACA_PAPER=1 but broker_mode=live")
+                    blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"mode_mismatch"})
+                    continue
+            if broker_mode == "paper" and not settings.ALPACA_PAPER:
+                results.append("alpaca_order DENIED: ALPACA_PAPER=0 but broker_mode=paper")
+                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"mode_mismatch"})
+                continue
+
+            from .brokers.alpaca import place_order, AlpacaError
+            try:
+                order = place_order(
+                    api_key=settings.ALPACA_API_KEY,
+                    api_secret=settings.ALPACA_API_SECRET,
+                    paper=bool(settings.ALPACA_PAPER),
+                    base_url=(settings.ALPACA_BASE_URL or None),
+                    symbol=act.get("symbol") or act.get("ticker") or "",
+                    side=(act.get("side") or "").lower(),
+                    qty=act.get("qty"),
+                    notional=act.get("notional"),
+                    order_type=act.get("order_type") or act.get("type") or "market",
+                    time_in_force=act.get("time_in_force") or "day",
+                    limit_price=act.get("limit_price"),
+                    stop_price=act.get("stop_price"),
+                    extended_hours=bool(act.get("extended_hours", False)),
+                    client_order_id=act.get("client_order_id"),
+                )
+                results.append(f"alpaca_order OK id={order.get('id', '')} status={order.get('status', '')}")
+                blob.setdefault("alpaca_orders", []).append(order)
+            except AlpacaError as e:
+                results.append(f"alpaca_order ERROR: {str(e)[:200]}")
+                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":str(e)})
             continue
 
         results.append(execute_action(act))
