@@ -46,7 +46,7 @@ def _safe_json_extract(s: str) -> Dict[str, Any]:
     except Exception:
         start, end = s.find("{"), s.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(s[start : end + 1])
+            return json.loads(s[start: end + 1])
     raise ValueError("Model did not return valid JSON")
 
 
@@ -145,7 +145,9 @@ Return JSON only.
                 }
             )
 
+        # =========================
         # Final decision
+        # =========================
         if use_arbiter and len(provider_plan) >= 4:
             prov, model = provider_plan[3]
 
@@ -192,23 +194,29 @@ Return JSON only.
                 if rl == "MEDIUM" and worst_risk != "HIGH":
                     worst_risk = "MEDIUM"
 
-		no_reasons = []
-		no_required = []
+            no_reasons: List[str] = []
+            no_required: List[str] = []
 
-	    for r in results:
-		res = (r.get("result") or {})
-	    if str(res.get("verdict", "")).strip().upper() == "NO":
-		for x in (res.get("reasons") or []):
-			no_reasons.append(f"{r.get('role')}: {x}")
-        	for x in (res.get("required_changes") or []):
-      			no_required.append(f"{r.get('role')}: {x}")
+            for r in results:
+                res = r.get("result") or {}
+
+                if str(res.get("verdict", "")).strip().upper() == "NO":
+                    for x in res.get("reasons") or []:
+                        no_reasons.append(f"{r.get('role')}: {x}")
+
+                    for x in res.get("required_changes") or []:
+                        no_required.append(f"{r.get('role')}: {x}")
 
             final = {
-    		"verdict": "NO" if "NO" in verdicts else "YES",
-    		"risk_level": worst_risk,
-    		"reasons": (["Arbiter disabled; using reviewer votes."] + no_reasons) if no_reasons else ["Arbiter disabled; using reviewer votes."],
-    		"required_changes": no_required,
-    		"message_to_human": None,
+                "verdict": "NO" if "NO" in verdicts else "YES",
+                "risk_level": worst_risk,
+                "reasons": (
+                    ["Arbiter disabled; using reviewer votes."] + no_reasons
+                    if no_reasons
+                    else ["Arbiter disabled; using reviewer votes."]
+                ),
+                "required_changes": no_required,
+                "message_to_human": None,
             }
 
         return {"final": final, "council": results}
