@@ -126,18 +126,18 @@ Return JSON only.
             # If any reviewer says NO => NO, else YES
             verdicts = [str((r.get("result") or {}).get("verdict", "NO")).strip().upper() for r in results]
 
-	def _normalize_risk_level(v) -> str:
-    	# Accept "LOW/MEDIUM/HIGH", or ints like 0/1/2/3
-    	if v is None:
-        	return "LOW"
-    	if isinstance(v, (int, float)):
-        	# Map numbers to strings (tweak if your app uses a different convention)
-        	if v >= 3:
+	    def _normalize_risk_level(v) -> str:
+    		# Accept "LOW/MEDIUM/HIGH", or ints like 0/1/2/3
+    		if v is None:
+        	    return "LOW"
+    		if isinstance(v, (int, float)):
+        	    # Map numbers to strings (tweak if your app uses a different convention)
+        	    if v >= 3:
             		return "HIGH"
-        	if v == 2:
-            	return "MEDIUM"
-         return "LOW"
-    	return str(v).strip().upper()
+        	    if v == 2:
+            		return "MEDIUM"
+        	    return "LOW"
+    		return str(v).strip().upper()
 
             worst_risk = "LOW"
 	    for r in results:
