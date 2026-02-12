@@ -174,7 +174,7 @@ class TrayWebUI:
             }
 
             try:
-                r = requests.post(self.api_base + "/plan", json=payload, eaders={"X-Caller":"tray"}, timeout=300)
+                r = requests.post(self.api_base + "/plan", json=payload, headers={"X-Caller":"tray"}, timeout=300)
                 r.raise_for_status()
                 data = r.json()
                 msg = (
