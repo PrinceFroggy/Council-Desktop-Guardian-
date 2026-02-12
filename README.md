@@ -252,6 +252,11 @@ or:
 python run.py
 ```
 
+IF THIS DOES NOT WORK, DO:
+
+pip install uvicorn
+uvicorn app.main:app --host 0.0.0.0 --port 7070 --reload
+
 Bot starts:
 • Council
 • Telegram
