@@ -222,6 +222,12 @@ STEP 5.5 — Start Redis
 brew services start redis
 ```
 
+IF U GET ERRORS RELATED TO REDIS, RUN THIS
+
+docker run -d --name redis-stack \
+  -p 6379:6379 -p 8001:8001 \
+  redis/redis-stack:latest
+
 **Windows**
 Start your Redis service, OR run:
 ```bash
