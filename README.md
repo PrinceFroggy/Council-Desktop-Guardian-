@@ -113,9 +113,13 @@ STEP 1 — Install Python
 ======================
 
 macOS:
+- Install Homebrew
+- `brew install python node git redis`
     brew install python
 
 Windows:
+- Install: Python 3.10+ , Node.js LTS, Git
+- Install Redis (or run Redis in Docker)
     https://python.org/downloads
 
 Verify:
@@ -124,6 +128,11 @@ Verify:
 ======================
 STEP 2 — Install project
 ======================
+
+```bash
+git clone https://github.com/PrinceFroggy/Council-Desktop-Guardian-
+cd Council-Desktop-Guardian-
+```
 
 pip install -r requirements.txt
 
@@ -139,6 +148,13 @@ STEP 3 — Create Alpaca Wallet (REQUIRED FOR TRADING)
 3. Enable PAPER trading
 4. Generate API keys
 
+Set these keys if you want Alpaca integration:
+- `TRADING_BROKER=alpaca`
+- `ALPACA_API_KEY=...`
+- `ALPACA_API_SECRET=...`
+- `ALPACA_PAPER=1` (paper) or `0` (live)
+- `ALPACA_BASE_URL` optional
+
 ======================
 STEP 4 — Setup Telegram Approval (RECOMMENDED)
 ======================
@@ -148,6 +164,13 @@ Create bot:
 2. /newbot
 3. Copy BOT TOKEN
 
+3. Copy the **bot token** into:
+   - `TELEGRAM_BOT_TOKEN=...`
+4. Get your **chat id**
+   - Easiest: add the bot to a private group, send one message, then use a “getUpdates” helper (many guides online)
+   - Put it into:
+   - `TELEGRAM_CHAT_ID=...`
+
 Get chat id:
 Message your bot once then open:
 https://api.telegram.org/bot<TOKEN>/getUpdates
@@ -156,40 +179,72 @@ Copy:
 "chat":{"id":123456789}
 
 ======================
+STEP 4.5 — Python venv
+======================
+
+```bash
+python -m venv venv
+```
+
+**macOS**
+```bash
+source venv/bin/activate
+```
+
+**Windows (PowerShell)**
+```powershell
+venv\Scripts\Activate.ps1
+```
+
+======================
 STEP 5 — Create .env
 ======================
 
-Create file named `.env` in project root.
+Copy the template:
+- macOS/Linux: `cp .env.example .env`
+- Windows: `copy .env.example .env`
 
-Paste:
+Open `.env` and fill what you need.
 
-TRADING_BROKER=alpaca
-ALPACA_API_KEY=YOUR_KEY
-ALPACA_API_SECRET=YOUR_SECRET
-ALPACA_PAPER=1
+✅ Minimum for **paper + Telegram**:
+- `REDIS_URL`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- (optional) `TRADING_BROKER=alpaca` + Alpaca keys if you want real broker integration
+- Keep `ALPACA_PAPER=1` while testing
 
-TELEGRAM_BOT_TOKEN=YOUR_TOKEN
-TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+======================
+STEP 5.5 — Start Redis
+======================
 
-AUTOPILOT_ENABLED=1
-AUTOPILOT_CAN_EXECUTE=0
-AUTOPILOT_INTERVAL_SECONDS=1800
-AUTOPILOT_MIN_SCORE=0.7
-AUTOPILOT_MAX_TRADES_PER_RUN=2
+**macOS**
+```bash
+brew services start redis
+```
 
-RISK_MAX_POSITION_PCT=0.10
-
-(Optional signals)
-NEWS_API_KEY=
-FRED_API_KEY=
-REDDIT_CLIENT_ID=
-REDDIT_SECRET=
+**Windows**
+Start your Redis service, OR run:
+```bash
+docker run -p 6379:6379 redis:latest
+```
 
 ======================
 STEP 6 — Run Bot
 ======================
 
 python -m app.main
+
+```bash
+python -m app.main
+```
+If your repo has a top-level runner:
+```bash
+python main.py
+```
+or:
+```bash
+python run.py
+```
 
 Bot starts:
 • Council
@@ -206,6 +261,33 @@ streamlit run app/dashboard/streamlit_app.py
 
 Open:
 http://localhost:8501
+
+## Autopilot (quant loop)
+
+Autopilot has two modes:
+- **Report-only** (safe): generates candidates + signals + proposals
+- **Execute**: can place orders (only if enabled)
+
+Set:
+- `AUTOPILOT_ENABLED=1`
+- `AUTOPILOT_CAN_EXECUTE=0`  ← start here
+- `AUTOPILOT_INTERVAL_SECONDS=1800`
+
+When you are confident:
+- `AUTOPILOT_CAN_EXECUTE=1`
+
+---
+
+## Safety Switches (important)
+
+These exist because the bot may fetch web pages or run higher-risk actions.
+
+- `ENABLE_WEB_RESEARCH=0|1`
+- `WEB_ALLOWLIST=domain1.com,domain2.com` (strongly recommended)
+- `ENABLE_DANGEROUS_TOOLS=0|1`
+- `ALLOW_ABSOLUTE_PATHS=0|1`
+
+Leave them OFF until you understand what they do.
 
 =====================================================================
 ⚙ EXECUTION MODES
