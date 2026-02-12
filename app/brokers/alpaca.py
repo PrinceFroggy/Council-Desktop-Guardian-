@@ -27,6 +27,11 @@ def place_order(
     stop_price: Optional[float] = None,
     extended_hours: bool = False,
     client_order_id: Optional[str] = None,
+    # bracket/oco support (optional)
+    order_class: Optional[str] = None,
+    take_profit_limit_price: Optional[float] = None,
+    stop_loss_stop_price: Optional[float] = None,
+    stop_loss_limit_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Places an order via Alpaca Trading API v2 (/v2/orders).
@@ -56,6 +61,19 @@ def place_order(
     }
     if client_order_id:
         payload["client_order_id"] = client_order_id
+
+    # Optional bracket/oco/oto orders
+    if order_class:
+        # Alpaca supports: simple|bracket|oco|oto
+        oc = str(order_class)
+        payload["order_class"] = oc
+        if take_profit_limit_price is not None:
+            payload["take_profit"] = {"limit_price": str(take_profit_limit_price)}
+        if stop_loss_stop_price is not None:
+            sl: Dict[str, Any] = {"stop_price": str(stop_loss_stop_price)}
+            if stop_loss_limit_price is not None:
+                sl["limit_price"] = str(stop_loss_limit_price)
+            payload["stop_loss"] = sl
 
     if qty is not None:
         payload["qty"] = str(qty)
