@@ -37,5 +37,48 @@ class Settings(BaseModel):
     # Paper trading
     PAPER_START_CASH: float = float(os.getenv("PAPER_START_CASH", "100000"))
 
+    # ===== Quant / Signals / Autopilot (new) =====
+    # Master switch for the fully-automated quant loop.
+    AUTOPILOT_ENABLED: int = int(os.getenv("AUTOPILOT_ENABLED", "0"))
+    # If 1, autopilot is allowed to place orders automatically. If 0, it only produces reports.
+    AUTOPILOT_CAN_EXECUTE: int = int(os.getenv("AUTOPILOT_CAN_EXECUTE", "0"))
+    AUTOPILOT_INTERVAL_SECONDS: int = int(os.getenv("AUTOPILOT_INTERVAL_SECONDS", "1800"))  # 30 min
+    AUTOPILOT_MAX_CANDIDATES: int = int(os.getenv("AUTOPILOT_MAX_CANDIDATES", "10"))
+    AUTOPILOT_MAX_TRADES_PER_RUN: int = int(os.getenv("AUTOPILOT_MAX_TRADES_PER_RUN", "2"))
+    AUTOPILOT_MIN_SCORE: float = float(os.getenv("AUTOPILOT_MIN_SCORE", "0.70"))
+    # If 1, autopilot will skip trades that Council votes NO. If 0, Council is monitor-only.
+    AUTOPILOT_RESPECT_COUNCIL: int = int(os.getenv("AUTOPILOT_RESPECT_COUNCIL", "0"))
+
+    # Risk controls (defaults are conservative)
+    RISK_MAX_POSITION_PCT: float = float(os.getenv("RISK_MAX_POSITION_PCT", "0.10"))  # 10% of equity
+    RISK_MAX_SECTOR_PCT: float = float(os.getenv("RISK_MAX_SECTOR_PCT", "0.30"))      # 30% sector cap
+    RISK_DEFAULT_STOP_ATR: float = float(os.getenv("RISK_DEFAULT_STOP_ATR", "2.0"))
+    RISK_DEFAULT_TAKEPROFIT_RR: float = float(os.getenv("RISK_DEFAULT_TAKEPROFIT_RR", "2.0"))
+
+    # Market/price data for indicators/backtests
+    PRICE_DATA_PROVIDER: str = os.getenv("PRICE_DATA_PROVIDER", "yfinance")  # yfinance|alpaca
+    BACKTEST_LOOKBACK_DAYS: int = int(os.getenv("BACKTEST_LOOKBACK_DAYS", "365"))
+
+    # Optional external APIs (set env vars to enable)
+    FMP_API_KEY: str = os.getenv("FMP_API_KEY", "")  # Financial Modeling Prep
+    NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
+    REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
+    REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+    REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "council-desktop-guardian/1.0")
+    GOOGLE_TRENDS_GEO: str = os.getenv("GOOGLE_TRENDS_GEO", "US")
+    CONGRESS_API_KEY: str = os.getenv("CONGRESS_API_KEY", "")
+    FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
+
+    # Optional web search providers for ticker discovery
+    PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+
+    # SaaS / billing (optional)
+    SAAS_ENABLED: int = int(os.getenv("SAAS_ENABLED", "0"))
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
+    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./council.db")
+
 
 settings = Settings()

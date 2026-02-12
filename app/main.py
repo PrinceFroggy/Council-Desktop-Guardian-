@@ -24,6 +24,11 @@ from .web_fetch import fetch_url, WebFetchError
 from .sms_commands import parse_sms_to_plan
 from .twilio_notify import twilio_send_sms
 
+# Optional SaaS mode
+from .saas.db import init_db, get_user_by_email, create_user
+from .saas.auth import hash_password, verify_password, create_jwt, decode_jwt
+from .saas.stripe_webhook import handle_stripe_webhook
+
 load_dotenv()
 
 app = FastAPI()
@@ -46,6 +51,17 @@ try:
     start_scheduler(rag, r, providers, council)
 except Exception:
     pass
+
+# init SaaS DB (safe no-op if SAAS_ENABLED=0)
+try:
+    if getattr(settings, "SAAS_ENABLED", 0):
+        init_db()
+except Exception:
+    pass
+
+class _AuthRequest(BaseModel):
+    email: str
+    password: str
 
 class PlanRequest(BaseModel):
     action_request: str
@@ -295,6 +311,10 @@ def execute(pending_id: str):
                     stop_price=act.get("stop_price"),
                     extended_hours=bool(act.get("extended_hours", False)),
                     client_order_id=act.get("client_order_id"),
+                    order_class=act.get("order_class"),
+                    take_profit_limit_price=act.get("take_profit_limit_price") or (act.get("take_profit") or {}).get("limit_price"),
+                    stop_loss_stop_price=act.get("stop_loss_stop_price") or (act.get("stop_loss") or {}).get("stop_price"),
+                    stop_loss_limit_price=act.get("stop_loss_limit_price") or (act.get("stop_loss") or {}).get("limit_price"),
                 )
                 results.append(f"alpaca_order OK id={order.get('id', '')} status={order.get('status', '')}")
                 blob.setdefault("alpaca_orders", []).append(order)
@@ -442,3 +462,86 @@ def mcp_sync():
     }
     r.set(b"mcp:tools_snapshot", json.dumps(snap, ensure_ascii=False).encode("utf-8"))
     return snap
+
+
+# =====================
+# Optional SaaS endpoints
+# =====================
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _bearer_email(request: Request) -> str | None:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth:
+        return None
+    parts = auth.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    token = parts[1]
+    data = decode_jwt(token)
+    if not data:
+        return None
+    return str(data.get("sub") or "") or None
+
+
+@app.post("/saas/register")
+def saas_register(req: RegisterRequest):
+    if not getattr(settings, "SAAS_ENABLED", 0):
+        return {"error": "SAAS_ENABLED=0"}
+    init_db()
+    email = req.email.strip().lower()
+    if not email or "@" not in email:
+        return {"error": "invalid email"}
+    if len(req.password) < 8:
+        return {"error": "password must be >= 8 chars"}
+    if get_user_by_email(email):
+        return {"error": "user exists"}
+    u = create_user(email=email, password_hash=hash_password(req.password), created_at=int(time.time()))
+    token = create_jwt(email)
+    return {"ok": True, "token": token, "user": {"email": u.get("email"), "plan": u.get("plan")}}
+
+
+@app.post("/saas/login")
+def saas_login(req: LoginRequest):
+    if not getattr(settings, "SAAS_ENABLED", 0):
+        return {"error": "SAAS_ENABLED=0"}
+    init_db()
+    email = req.email.strip().lower()
+    u = get_user_by_email(email)
+    if not u:
+        return {"error": "invalid credentials"}
+    if not verify_password(req.password, u.get("password_hash") or ""):
+        return {"error": "invalid credentials"}
+    token = create_jwt(email)
+    return {"ok": True, "token": token, "user": {"email": u.get("email"), "plan": u.get("plan")}}
+
+
+@app.get("/saas/me")
+def saas_me(request: Request):
+    if not getattr(settings, "SAAS_ENABLED", 0):
+        return {"error": "SAAS_ENABLED=0"}
+    email = _bearer_email(request)
+    if not email:
+        return {"error": "unauthorized"}
+    u = get_user_by_email(email)
+    if not u:
+        return {"error": "not found"}
+    return {"ok": True, "user": {"email": u.get("email"), "plan": u.get("plan"), "created_at": u.get("created_at")}}
+
+
+@app.post("/saas/stripe/webhook")
+async def saas_stripe_webhook(request: Request):
+    if not getattr(settings, "SAAS_ENABLED", 0):
+        return {"error": "SAAS_ENABLED=0"}
+    init_db()
+    raw = await request.body()
+    headers = {k: v for k, v in request.headers.items()}
+    return handle_stripe_webhook(raw, headers)

@@ -10,6 +10,7 @@ from .config import settings
 from .prompts import DAILY_RESEARCH_SYSTEM, NEWS_SIGNAL_SYSTEM
 from .notify import telegram_send
 from .engine import submit_request
+from .autopilot import run_autopilot_once
 
 _TICKER_RE = re.compile(r"(?:\$|\b)([A-Z]{1,5})(?:\b)")
 
@@ -253,3 +254,19 @@ def start_scheduler(rag, r, providers, council):
 
     threading.Thread(target=daily_loop, daemon=True).start()
     threading.Thread(target=news_loop, daemon=True).start()
+
+    # 3) Quant autopilot (optional)
+    def autopilot_loop():
+        if not getattr(settings, "AUTOPILOT_ENABLED", 0):
+            return
+        while True:
+            try:
+                run_autopilot_once(r, council=council)
+            except Exception as ex:
+                try:
+                    telegram_send(f"[Autopilot] error: {ex}")
+                except Exception:
+                    pass
+            time.sleep(max(60, int(getattr(settings, "AUTOPILOT_INTERVAL_SECONDS", 1800))))
+
+    threading.Thread(target=autopilot_loop, daemon=True).start()
