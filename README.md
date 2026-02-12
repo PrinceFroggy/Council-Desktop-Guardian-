@@ -116,9 +116,10 @@ macOS:
 - Install Homebrew
 - `brew install python node git redis`
     brew install python
+brew install ollama
 
 Windows:
-- Install: Python 3.10+ , Node.js LTS, Git
+- Install: Python 3.10+ , Node.js LTS, Git, Ollama
 - Install Redis (or run Redis in Docker)
     https://python.org/downloads
 
