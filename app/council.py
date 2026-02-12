@@ -192,12 +192,23 @@ Return JSON only.
                 if rl == "MEDIUM" and worst_risk != "HIGH":
                     worst_risk = "MEDIUM"
 
+		no_reasons = []
+		no_required = []
+
+	    for r in results:
+		res = (r.get("result") or {})
+	    if str(res.get("verdict", "")).strip().upper() == "NO":
+		for x in (res.get("reasons") or []):
+			no_reasons.append(f"{r.get('role')}: {x}")
+        	for x in (res.get("required_changes") or []):
+      			no_required.append(f"{r.get('role')}: {x}")
+
             final = {
-                "verdict": "NO" if "NO" in verdicts else "YES",
-                "risk_level": worst_risk,
-                "reasons": ["Arbiter disabled; using reviewer votes."],
-                "required_changes": [],
-                "message_to_human": None,
+    		"verdict": "NO" if "NO" in verdicts else "YES",
+    		"risk_level": worst_risk,
+    		"reasons": (["Arbiter disabled; using reviewer votes."] + no_reasons) if no_reasons else ["Arbiter disabled; using reviewer votes."],
+    		"required_changes": no_required,
+    		"message_to_human": None,
             }
 
         return {"final": final, "council": results}
