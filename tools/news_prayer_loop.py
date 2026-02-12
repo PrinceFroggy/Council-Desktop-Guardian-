@@ -114,7 +114,7 @@ def call_plan(action_request: str) -> dict:
         "rag_mode": RAG_MODE,
         "dry_run": DRY_RUN,
     }
-    resp = requests.post(PLAN_ENDPOINT, json=payload, timeout=60)
+    resp = requests.post(PLAN_ENDPOINT, json=payload, timeout=300)
     resp.raise_for_status()
     return resp.json()
 
