@@ -8,6 +8,24 @@
 - Require human approval for any execution that changes files or controls the desktop.
 - If uncertain, default to NO.
 
+# === READ-ONLY / NOTIFY-ONLY ALLOWLIST ===
+# If the proposed plan is notify_only and contains NO actions,
+# it is safe to approve because it does not execute desktop actions or tools.
+# External content (e.g., headlines/news snippets) is allowed when the assistant
+# is only summarizing and labeling uncertainty, and NOT instructing the user to take actions.
+
+ALLOW if:
+- proposed_plan.type == "notify_only"
+- proposed_plan.actions is empty
+- request is "summarize / brief / classify" external text (news headlines/snippets)
+- output is informational only (no instructions to buy/sell, no illegal guidance, no self-harm, no personal data extraction)
+- include a disclaimer that it's not financial advice if markets are mentioned
+
+REQUIRE HUMAN APPROVAL if:
+- any desktop/tool actions are requested
+- it asks to contact people, send messages, execute trades, move money, or do anything outside "notify_only"
+- it contains persuasion to take urgent real-world actions
+
 # Allowlist: notify-only plans are safe (no desktop/tool execution)
 - Plans with type=notify_only AND actions=[] are allowlisted and may be approved.
 
