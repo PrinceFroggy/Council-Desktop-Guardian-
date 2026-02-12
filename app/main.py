@@ -264,6 +264,16 @@ def status(pending_id: str):
         return {"error": "not found"}
     return json.loads(data.decode())
 
+def _unwrap_plan(blob: dict) -> dict:
+    plan = blob.get("proposed_plan") or {}
+
+    # If /plan stored a wrapper that contains "proposed_plan": {...}
+    inner = plan.get("proposed_plan")
+    if isinstance(inner, dict) and ("actions" in inner or "type" in inner):
+        return inner
+
+    # Otherwise it's already flat
+    return plan
 
 @app.post("/execute/{pending_id}")
 def execute(pending_id: str):
