@@ -46,7 +46,7 @@ def _safe_json_extract(s: str) -> Dict[str, Any]:
     except Exception:
         start, end = s.find("{"), s.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(s[start: end + 1])
+            return json.loads(s[start:end + 1])
     raise ValueError("Model did not return valid JSON")
 
 
@@ -134,7 +134,17 @@ Return JSON only.
                 model,
             )
 
-            parsed = _safe_json_extract(raw)
+            try:
+                parsed = _safe_json_extract(raw)
+            except Exception as e:
+                parsed = {
+                    "verdict": "NO",
+                    "risk_level": "MEDIUM",
+                    "reasons": [f"Invalid JSON from model: {e}"],
+                    "required_changes": [
+                        "Return STRICT JSON only (no prose, no code fences)."
+                    ],
+                }
 
             results.append(
                 {
@@ -170,27 +180,21 @@ Return JSON only.
             def _normalize_risk_level(v) -> str:
                 if v is None:
                     return "LOW"
-
                 if isinstance(v, (int, float)):
                     if v >= 3:
                         return "HIGH"
                     if v == 2:
                         return "MEDIUM"
                     return "LOW"
-
                 return str(v).strip().upper()
 
             worst_risk = "LOW"
 
             for r in results:
-                rl = _normalize_risk_level(
-                    (r.get("result") or {}).get("risk_level")
-                )
-
+                rl = _normalize_risk_level((r.get("result") or {}).get("risk_level"))
                 if rl == "HIGH":
                     worst_risk = "HIGH"
                     break
-
                 if rl == "MEDIUM" and worst_risk != "HIGH":
                     worst_risk = "MEDIUM"
 
@@ -204,7 +208,18 @@ Return JSON only.
                     for x in res.get("reasons") or []:
                         no_reasons.append(f"{r.get('role')}: {x}")
 
-                    for x in res.get("required_changes") or []:
+                    rc = res.get("required_changes")
+
+                    if rc is None:
+                        rc_list = []
+                    elif isinstance(rc, str):
+                        rc_list = [] if rc.strip().lower() in ("none", "") else [rc]
+                    elif isinstance(rc, list):
+                        rc_list = rc
+                    else:
+                        rc_list = [str(rc)]
+
+                    for x in rc_list:
                         no_required.append(f"{r.get('role')}: {x}")
 
             final = {
