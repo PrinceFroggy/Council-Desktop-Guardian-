@@ -124,15 +124,29 @@ Return JSON only.
         else:
             # No arbiter: compute a simple final based on results
             # If any reviewer says NO => NO, else YES
-            verdicts = [(r.get("result") or {}).get("verdict", "NO") for r in results]
+            verdicts = [str((r.get("result") or {}).get("verdict", "NO")).strip().upper() for r in results]
+
+	def _normalize_risk_level(v) -> str:
+    	# Accept "LOW/MEDIUM/HIGH", or ints like 0/1/2/3
+    	if v is None:
+        	return "LOW"
+    	if isinstance(v, (int, float)):
+        	# Map numbers to strings (tweak if your app uses a different convention)
+        	if v >= 3:
+            		return "HIGH"
+        	if v == 2:
+            	return "MEDIUM"
+         return "LOW"
+    	return str(v).strip().upper()
+
             worst_risk = "LOW"
-            for r in results:
-                rl = ((r.get("result") or {}).get("risk_level") or "LOW").upper()
-                if rl == "HIGH":
-                    worst_risk = "HIGH"
-                    break
-                if rl == "MEDIUM":
-                    worst_risk = "MEDIUM"
+	    for r in results:
+    		rl = _normalize_risk_level((r.get("result") or {}).get("risk_level"))
+    	    if rl == "HIGH":
+        	worst_risk = "HIGH"
+        	break
+    	    if rl == "MEDIUM" and worst_risk != "HIGH":
+        	worst_risk = "MEDIUM"
             final = {
                 "verdict": "NO" if "NO" in verdicts else "YES",
                 "risk_level": worst_risk,
