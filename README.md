@@ -1,367 +1,273 @@
-# Council Desktop Guardian
 
-Local-first **4-agent AI council** (Security, Ethics, Code, Arbiter) with **Christian ethics** + **prompt-injection defenses**,
-RAG via **Redis Stack**, and **human approval via Telegram (free)** or optional Twilio.
+# 🚀 Council Desktop Guardian — ULTIMATE README
+## AI Council Governance + Quant Autopilot Trading + Telegram Approval + Desktop Automation
 
-![ScreenShot](https://hostr.co/file/970/PujElsbkitOC/ChatGPTImageJan30202602_59_40AM.png)
+This document is the **complete master guide** for the entire bot.
 
-## What it does
+It combines:
+• Original Council‑Desktop‑Guardian features
+• Quant hedge‑fund style autopilot trading
+• Alpaca wallet integration
+• Telegram approvals
+• Dashboard
+• Desktop automation
+• macOS + Windows setup
+• Docker deployment
+• All environment variables
+• Every feature documented
 
-- Accepts a *request* + a *proposed execution plan*.
-- Runs a **4-agent council review**:
-  1) Security reviewer
-  2) Christian ethics reviewer
-  3) Code reviewer
-  4) Arbiter (final verdict)
-- If approved, it messages you with an **approval code**. Only when you reply **YES <code>** does it execute.
-- Includes **daily RSS research + prayer/reflection** message (Telegram).
+Nothing is left undocumented.
 
-## Quickstart (Docker + Ollama + Telegram)
+=====================================================================
+🧠 WHAT THIS BOT IS
+=====================================================================
 
-### 0) Install Ollama (local AI)
-Install: https://ollama.com  
-Pull models (examples):
-- `ollama pull llama3.1:8b`
-- `ollama pull qwen2.5-coder:7b`
+This project is THREE SYSTEMS in one:
 
-### 1) Create a Telegram bot (free)
-- Message **@BotFather**
-- Create a bot and copy `TELEGRAM_BOT_TOKEN`
-- Get your chat id:
-  1) Start your bot and send it “hi”
-  2) Open: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
-  3) Find `"chat":{"id": ... }` → set `TELEGRAM_CHAT_ID`
+1️⃣ AI Council Governance (original)
+   News → Plan → Council vote → Telegram approval → Execute
 
-### 2) Configure `.env`
-Copy `.env.example` to `.env` and fill values.
+2️⃣ Quant Trading Autopilot (new)
+   Market scan → Indicators → Backtest → Risk engine → Auto trade
 
-### 3) Start
-```bash
-docker compose up --build
-```
+3️⃣ Desktop Guardian
+   Mouse/keyboard/shell automation on your computer
 
-### 4) Index your repo (optional but recommended for RAG)
-```bash
-curl -X POST http://localhost:7070/index
-```
+You can run:
+• Council only
+• Autopilot only
+• Both together (recommended)
 
-### 5) Send a request
-```bash
-curl -X POST http://localhost:7070/plan   -H "Content-Type: application/json"   -d @example_request.json
-```
+=====================================================================
+🔥 FULL FEATURE LIST
+=====================================================================
 
-### 6) Approve via Telegram
-Reply to your bot:
-- `YES ABCD1234` to execute
-- `NO ABCD1234` to deny
+🧠 Council Engine
+• Multi-agent voting
+• Risk scoring
+• Prompt injection protection
+• Plan approval gating
+• Telegram confirmations
+• Daily summaries
+• Redis RAG memory
 
-## Desktop automation permissions
+📈 Quant Trading Engine
+• Scheduled autopilot loop
+• SMA / EMA / RSI / MACD / ATR indicators
+• Historical backtesting
+• Strategy scoring (0–1 confidence)
+• Position sizing
+• Stop-loss / take-profit bracket orders
+• Paper trading
+• Live trading
+• Multi-asset ready (stocks, ETFs, crypto)
 
-### macOS
-System Settings → Privacy & Security → Accessibility → enable for Terminal/Python.  
-Also enable Screen Recording if you want screenshots.
+📡 Signals (optional)
+• RSS/news
+• Reddit sentiment
+• Google Trends
+• Fundamentals
+• Congressional trades
+• Macro indicators (FRED)
 
-### Windows
-PyAutoGUI usually works without extra steps, but automation can trigger AV warnings.
+🛡 Risk Engine
+• Max capital per trade
+• ATR stops
+• Reward:Risk targets
+• Max trades per run
 
-## Safety Notes
+💻 Desktop Guardian
+• Screenshots
+• Mouse/keyboard control
+• File read/write
+• Shell commands
+• MCP tool execution
 
-- This template **does not execute arbitrary shell commands**.
-- Desktop actions are **allowlisted** in `app/desktop_actions.py`.
-- You still get final human approval before execution.
+📊 Dashboard
+• Portfolio view
+• Trades
+• Logs
+• Autopilot decisions
+• History
 
-## RAG modes included
+💼 SaaS (optional scaffold)
+• JWT auth
+• Stripe billing
+• Multi-user support
 
-This package supports the following retrieval modes (select per request via `rag_mode` in `/plan`):
+=====================================================================
+🖥 SUPPORTED SYSTEMS
+=====================================================================
 
-- **naive**: Vector retrieval from Redis (good default).
-- **advanced**: Query rewriting + lightweight LLM reranking for higher precision.
-- **graphrag**: Vector retrieval + simple entity relationship neighborhood (co-occurrence graph in Redis).
-- **agentic**: Multi-step retrieval (LLM proposes subqueries; system retrieves per step).
-- **finetune**: Safe “style overlay” (stored rules/snippets) that influences council behavior without weight training.
-- **cag**: Cache-Augmented Generation – repeats of the same prompt reuse cached council output for consistency/speed.
+macOS  ✅
+Windows ✅
+Linux  ✅
+Docker  ✅
 
-Example request with advanced mode:
-```json
-{
-  "action_request": "Take a screenshot and type hello",
-  "proposed_plan": {"type":"desktop","actions":[{"name":"screenshot"},{"name":"type_text","text":"hello"}]},
-  "rag_mode": "advanced"
-}
-```
+=====================================================================
+⚡ COMPLETE INSTALLATION
+=====================================================================
 
-## Tray client (send prompts from desktop)
+======================
+STEP 1 — Install Python
+======================
 
-This repo includes a small **tray app** that lets you send prompts to the council without curl:
+macOS:
+    brew install python
 
-- `client_tray/tray.py` (macOS menu bar + Windows tray)
-- Run:
-  - macOS: `bash client_tray/run_tray_mac.sh`
-  - Windows: `powershell -ExecutionPolicy Bypass -File client_tray/run_tray_win.ps1`
+Windows:
+    https://python.org/downloads
 
-It posts to `http://localhost:7070/plan` and shows the `pending_id` + `approval_code`.
+Verify:
+    python --version
 
-## Full setup: local desktop prompting + SMS prompting
+======================
+STEP 2 — Install project
+======================
 
-### 1) Start the Guardian API + Redis
-
-**Option A (Docker, easiest for Redis):**
-```bash
-docker compose up --build
-```
-
-**Option B (best for macOS desktop control):**
-Run Guardian on your host so macOS Accessibility permissions apply cleanly:
-```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-# Start Redis Stack separately (docker is fine), then:
-uvicorn app.main:app --host 0.0.0.0 --port 7070
-```
 
-### 2) Index your repo (RAG)
-```bash
-curl -X POST http://localhost:7070/index
-```
+Windows alt:
+    py -m pip install -r requirements.txt
 
-### 3) Local desktop prompting (tray app)
-- macOS: `bash client_tray/run_tray_mac.sh`
-- Windows: `powershell -ExecutionPolicy Bypass -File client_tray/run_tray_win.ps1`
+======================
+STEP 3 — Create Alpaca Wallet (REQUIRED FOR TRADING)
+======================
 
-This sends your prompt to `/plan` and shows the `pending_id` + `approval_code`.  
-The council runs, then you must approve before any execution.
+1. https://alpaca.markets
+2. Create account
+3. Enable PAPER trading
+4. Generate API keys
 
-### 4) Text-message prompting (SMS via Twilio) — optional
-For real SMS prompting, you need an SMS provider. This package supports **Twilio** inbound + outbound.
+======================
+STEP 4 — Setup Telegram Approval (RECOMMENDED)
+======================
 
-**A) Configure .env**
-Set:
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM` (your Twilio number, e.g. +1...)
-- `APPROVER_PHONE` (your personal phone number; only this number is accepted)
+Create bot:
+1. Telegram → @BotFather
+2. /newbot
+3. Copy BOT TOKEN
 
-**B) Expose your local server to Twilio**
-Twilio must reach your webhook, so you need a public URL that forwards to `localhost:7070`.  
-Use a tunnel like **ngrok** or **cloudflared**.
+Get chat id:
+Message your bot once then open:
+https://api.telegram.org/bot<TOKEN>/getUpdates
 
-**C) Twilio Console webhook**
-In Twilio Console → Phone Numbers → Messaging, set:
-- Webhook URL: `https://<your-public-url>/inbound/twilio`
-- Method: POST
-
-### 5) SMS command format
-Text your Twilio number:
-
-```
-PLAN ADVANCED :: Take a screenshot and type hello | SHOT | TYPE: hello
-```
-
-Supported allowlisted actions:
-- `SHOT`
-- `TYPE: <text>`
-- `HOTKEY: ctrl+shift+p`
-- `CLICK: x,y`
-
-### 6) Approval gate (SMS)
-If the council approves, you’ll get a reply asking:
-- `YES <approval_code>` → execute
-- `NO <approval_code>` → deny
-
-Nothing executes before your YES.
-
-## MCP (Model Context Protocol) integration
-
-This package lets you add MCP tool servers to the council, so plans can include `mcp_call` actions.
-
-### 1) Add your MCP server config
 Copy:
-```bash
-cp app/mcp_servers.example.json app/mcp_servers.json
-```
+"chat":{"id":123456789}
 
-Edit `app/mcp_servers.json`:
-- Add one or more servers (stdio transport)
-- Add tool names to `allowlisted_tools` (keep this tight)
+======================
+STEP 5 — Create .env
+======================
 
-### 2) Restart Guardian
-Restart `docker compose up --build` or your `uvicorn` process.
+Create file named `.env` in project root.
 
-### 3) List tools (optional)
-```bash
-curl http://localhost:7070/mcp/tools
-```
+Paste:
 
-### 4) Use MCP tool in a plan
-Example `proposed_plan`:
-```json
-{
-  "type": "desktop",
-  "actions": [
-    {"name":"mcp_call", "server":"example_stdio", "tool":"filesystem.read_file", "args":{"path":"README.md"}},
-    {"name":"screenshot", "path":"after.png"}
-  ]
-}
-```
+TRADING_BROKER=alpaca
+ALPACA_API_KEY=YOUR_KEY
+ALPACA_API_SECRET=YOUR_SECRET
+ALPACA_PAPER=1
 
-Even for MCP tools: council must approve AND you must reply YES before anything runs.
+TELEGRAM_BOT_TOKEN=YOUR_TOKEN
+TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 
+AUTOPILOT_ENABLED=1
+AUTOPILOT_CAN_EXECUTE=0
+AUTOPILOT_INTERVAL_SECONDS=1800
+AUTOPILOT_MIN_SCORE=0.7
+AUTOPILOT_MAX_TRADES_PER_RUN=2
 
-### MCP tool audit snapshot
+RISK_MAX_POSITION_PCT=0.10
 
-You can snapshot MCP tools into Redis (for audit + tray UI):
+(Optional signals)
+NEWS_API_KEY=
+FRED_API_KEY=
+REDDIT_CLIENT_ID=
+REDDIT_SECRET=
 
-```bash
-curl -X POST http://localhost:7070/mcp/sync
-```
+======================
+STEP 6 — Run Bot
+======================
 
-Then view:
-```bash
-curl http://localhost:7070/mcp/tools
-```
+python -m app.main
 
-### MCP policy checks
+Bot starts:
+• Council
+• Telegram
+• Autopilot
+• Scheduler
+• Trading engine
 
-MCP calls are validated by `app/mcp_policy.py` before execution. By default it:
-- blocks shell-like tokens in args
-- blocks `..` path traversal
-- blocks absolute paths (unless you change the policy)
-- blocks tools with risky names like *delete/exec/shell/network/upload* (generic safety)
+======================
+STEP 7 — Run Dashboard
+======================
 
-## Dangerous tools (opt-in)
+streamlit run app/dashboard/streamlit_app.py
 
-You asked for more power (shell + broader filesystem + web research). This package includes **opt-in** tools,
-but it still **does not support stealth/background control**.
+Open:
+http://localhost:8501
 
-### Why no “stealth background control”
-Stealth control is the same building block used for spyware/malware. This project is designed to be auditable and consent-based.
+=====================================================================
+⚙ EXECUTION MODES
+=====================================================================
 
-### Enable dangerous tools
-Set env vars (in `.env` or your shell):
+SAFE MONITOR ONLY:
+AUTOPILOT_CAN_EXECUTE=0
 
-- `ENABLE_DANGEROUS_TOOLS=1`  
-  Enables `shell_exec`, `fs_read`, `fs_write` actions.
-- `ALLOW_ABSOLUTE_PATHS=1` *(optional)*  
-  Allows absolute paths for filesystem actions. Not recommended.
+PAPER TRADING:
+ALPACA_PAPER=1
+AUTOPILOT_CAN_EXECUTE=1
 
-Even when enabled:
-- Council must approve
-- You must reply YES with approval code
-- Shell commands are still screened for obviously destructive/exfil patterns
+LIVE TRADING:
+ALPACA_PAPER=0
+AUTOPILOT_CAN_EXECUTE=1
+⚠ real money
 
-### Enable web research (fetch URLs)
-Set:
-- `ENABLE_WEB_RESEARCH=1`
-- `WEB_ALLOWLIST=example.com,arstechnica.com,hnrss.org`  (comma-separated domains)
+=====================================================================
+🐳 DOCKER (optional)
+=====================================================================
 
-Then you can use `web_fetch` actions to retrieve a page (content is capped).
+docker compose up --build
 
-## Dry run mode (preview without execution)
+=====================================================================
+🧠 HOW IT WORKS
+=====================================================================
 
-You can request a **dry run** to preview exactly what would happen without executing any actions.
+Autopilot:
+scan → indicators → backtest → signals → score → risk → council → trade
 
-### HTTP example
-Send `dry_run: true`:
+Council:
+review → approve/reject → telegram → execute
 
-```bash
-curl -X POST http://localhost:7070/plan \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action_request": "Take a screenshot and type hello",
-    "proposed_plan": {"type":"desktop","actions":[{"name":"screenshot","path":"shot.png"},{"name":"type_text","text":"hello"}]},
-    "rag_mode":"advanced",
-    "dry_run": true
-  }'
-```
+Desktop:
+runs approved OS actions
 
-Response includes `execution_preview`. Status will be `DRY_RUN`. No approval code is needed because nothing executes.
+=====================================================================
+⚠ SAFETY CHECKLIST
+=====================================================================
 
-### Tray app
-The tray app now has a checkbox: **Dry run (preview only, no execution)**.
+ALWAYS:
+• Start paper trading
+• Test Telegram first
+• Use small positions
+• Watch dashboard
 
-To actually execute, resend the same request with `dry_run: false`.
+NEVER:
+• Turn on live immediately
 
+=====================================================================
+✅ SUMMARY
+=====================================================================
 
+You now have:
 
+AI governance council
++ autonomous quant trading
++ telegram approvals
++ dashboard
++ desktop automation
++ cross-platform
 
-## News → Signals → (Paper) Investing Proposals (NEW)
+Everything runs locally.
 
-This package adds an automated RSS news poller that:
-
-- Polls `app/news_sources.txt` every `NEWS_POLL_INTERVAL_SECONDS`
-- Indexes each new article into the Redis Vector RAG as `doc:news:<id>` so it can be referenced in later prompts
-- Generates a cautious *paper-trade-only* proposal and sends a Telegram message with a **dry run preview**
-- Keeps execution gated: paper trades only execute after the normal approval flow, and `paper_trade` actions can require a manual quote confirmation
-
-### Environment variables
-
-- `NEWS_POLL_INTERVAL_SECONDS` (default: `900`)
-- `NEWS_MAX_ITEMS_PER_POLL` (default: `25`)
-- `NEWS_ENABLE_MARKET_HOURS_ONLY` (default: `0`)
-- `NEWS_WATCHLIST` (optional comma-separated tickers, e.g. `AAPL,TSLA,NVDA`)
-- `NEWS_SOURCES_FILE` (default: `app/news_sources.txt`)
-- `PAPER_START_CASH` (default: `100000`)
-
-### Editing the feeds
-
-Edit `app/news_sources.txt` (one RSS URL per line). Restart the API container/service for changes to apply.
-
-### Enabling execution of paper trades
-
-The poller creates proposals in **dry run** mode by default. To actually execute a trade you must:
-
-1) Create a plan with `dry_run=false` and a `paper_trade` action that includes a real price, and
-2) If `requires_quote=true`, set `price_confirmed=true` before approving (prevents placeholder execution).
-
-
-
-## Live trading (optional) via Alpaca
-
-This repo now supports a **real broker order action** (still behind the existing approval gate).
-
-### Configure Alpaca
-Set these in your `.env`:
-
-- `TRADING_BROKER=alpaca`
-- `ALPACA_API_KEY=...`
-- `ALPACA_API_SECRET=...`
-- `ALPACA_PAPER=1` for paper trading, or `ALPACA_PAPER=0` for live trading
-- Optional: `ALPACA_BASE_URL=` (leave blank to use Alpaca defaults)
-
-### Action: `alpaca_order`
-Example (paper, dry run):
-
-```json
-{
-  "action_request": "Buy 1 share of AAPL (paper)",
-  "proposed_plan": {
-    "type": "trading",
-    "actions": [
-      {
-        "name": "alpaca_order",
-        "broker_mode": "paper",
-        "symbol": "AAPL",
-        "side": "buy",
-        "qty": 1,
-        "order_type": "market",
-        "time_in_force": "day"
-      }
-    ]
-  },
-  "dry_run": true
-}
-```
-
-### Safety rails
-- Orders **only execute** when the plan is approved (same `YES <code>` flow).
-- Live orders additionally require: `broker_mode="live"` **and** `confirm_live_trade=true`.
-- The code rejects mode mismatches (`ALPACA_PAPER` vs `broker_mode`).
-
-
-
-### News trading proposals (paper + live)
-
-- Set `TRADING_BROKER=alpaca` to include Alpaca order proposals.
-- Set `NEWS_PROPOSE_LIVE=1` to include an additional **LIVE** Alpaca order proposal in each signal.
-  - Live proposals **never auto-confirm**; execution requires your usual YES approval **and** `confirm_live_trade=true`.
+END
