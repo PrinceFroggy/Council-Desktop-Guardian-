@@ -309,6 +309,14 @@ These exist because the bot may fetch web pages or run higher-risk actions.
 
 Leave them OFF until you understand what they do.
 
+======================
+STEP 7 — QUESTIONS?
+======================
+
+brew install python-tk@3.11
+
+IF TRAY DOESNT START
+
 =====================================================================
 ⚙ EXECUTION MODES
 =====================================================================
