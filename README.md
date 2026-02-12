@@ -268,6 +268,12 @@ Bot starts:
 STEP 7 — Run Dashboard
 ======================
 
+TRY THIS BEFORE NEXT LINE:
+
+PYTHONPATH=. streamlit run app/dashboard/streamlit_app.py
+
+TRY THIS IF BEFORE DOESNT WORK:
+
 streamlit run app/dashboard/streamlit_app.py
 
 Open:
