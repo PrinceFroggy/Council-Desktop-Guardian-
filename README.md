@@ -276,6 +276,8 @@ TRY THIS IF BEFORE DOESNT WORK:
 
 streamlit run app/dashboard/streamlit_app.py
 
+python tools/news_prayer_loop.py
+
 Open:
 http://localhost:8501
 
