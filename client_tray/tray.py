@@ -1,10 +1,11 @@
 import json
 import threading
-import tkinter as tk
-from tkinter import ttk, messagebox
+import webbrowser
+import os
+
+import rumps
+from flask import Flask, request, render_template_string
 import requests
-import pystray
-from PIL import Image, ImageDraw
 
 DEFAULT_API = "http://localhost:7070"
 
@@ -17,200 +18,292 @@ DEFAULT_PLAN = {
 
 RAG_MODES = ["naive", "advanced", "graphrag", "agentic", "finetune", "cag"]
 
-def make_icon():
-    img = Image.new("RGB", (64, 64), "black")
-    d = ImageDraw.Draw(img)
-    d.rectangle([8, 8, 56, 56], outline="white", width=2)
-    d.text((18, 22), "AI", fill="white")
-    return img
+HTML = r"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Council Desktop Guardian — Send Prompt</title>
+  <style>
+    body { font-family: -apple-system, system-ui; margin: 18px; }
+    h2 { margin: 0 0 14px 0; }
+    label { font-weight: 600; display:block; margin-top: 12px; }
+    input[type=text], textarea, select { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #ddd; }
+    textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .row { display:flex; gap:12px; }
+    .row > div { flex: 1; }
+    .btns { margin-top: 14px; display:flex; gap:10px; }
+    button { padding: 10px 14px; border-radius: 12px; border: 0; background: #111; color: #fff; cursor: pointer; }
+    button.secondary { background: #666; }
+    .msg { margin-top: 12px; padding: 10px; border-radius: 12px; background: #f5f5f5; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>Council Desktop Guardian — Send Prompt</h2>
 
-class App:
+  <form method="post" action="/send">
+    <label>Guardian API Base URL</label>
+    <input type="text" name="api_base" value="{{api_base}}" />
+
+    <div class="row">
+      <div>
+        <label>RAG Mode</label>
+        <select name="rag_mode">
+          {% for m in rag_modes %}
+            <option value="{{m}}" {% if m==rag_mode %}selected{% endif %}>{{m}}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Dry run (preview only, no execution)</label>
+        <select name="dry_run">
+          <option value="true" {% if dry_run %}selected{% endif %}>true</option>
+          <option value="false" {% if not dry_run %}selected{% endif %}>false</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Action Request (your prompt)</label>
+    <textarea name="prompt" rows="6">{{prompt}}</textarea>
+
+    <label>Proposed Plan (JSON)</label>
+    <textarea name="plan_json" rows="14">{{plan_json}}</textarea>
+
+    <label>MCP Tool Helper (optional)</label>
+    <div class="row">
+      <div>
+        <label>Server</label>
+        <input type="text" name="mcp_server" value="{{mcp_server}}" placeholder="(choose via Refresh below)"/>
+      </div>
+      <div>
+        <label>Tool</label>
+        <input type="text" name="mcp_tool" value="{{mcp_tool}}" placeholder="(choose via Refresh below)"/>
+      </div>
+    </div>
+
+    <label>Args (JSON)</label>
+    <textarea name="mcp_args" rows="5">{{mcp_args}}</textarea>
+
+    <div class="btns">
+      <button type="submit">Send to Council (/plan)</button>
+      <button type="button" class="secondary" onclick="window.location='/mcp_refresh'">Refresh MCP tools</button>
+      <button type="button" class="secondary" onclick="window.location='/mcp_add'">Add mcp_call action</button>
+      <button type="button" class="secondary" onclick="window.location='/close'">Close</button>
+    </div>
+  </form>
+
+  {% if msg %}
+    <div class="msg">{{msg}}</div>
+  {% endif %}
+
+  {% if tools %}
+    <div class="msg">
+MCP tools loaded:
+{% for s, arr in tools.items() %}
+- {{s}}: {{arr|length}} tools
+{% endfor %}
+    </div>
+  {% endif %}
+</body>
+</html>
+"""
+
+def bool_from_str(v: str) -> bool:
+    return str(v).lower().strip() in ("1","true","yes","y","on")
+
+class TrayWebUI:
+    """
+    A tiny local web UI so we don't need Tk.
+    rumps handles tray icon/menu; browser handles the form window.
+    """
     def __init__(self):
-        self.api_base = DEFAULT_API
+        self.api_base = os.getenv("API_BASE", DEFAULT_API).rstrip("/")
+        self.rag_mode = "advanced"
+        self.dry_run = True
+        self.prompt = "Take a screenshot and then type 'Hello from the council' in the focused field."
+        self.plan_obj = DEFAULT_PLAN.copy()
 
-    def open_window(self):
-        root = tk.Tk()
-        root.title("Council Desktop Guardian — Send Prompt")
-        root.geometry("820x820")
+        self.mcp_server = ""
+        self.mcp_tool = ""
+        self.mcp_args = {"path": "README.md"}
+        self.mcp_tools_cache = {}
 
-        frm = ttk.Frame(root, padding=10)
-        frm.pack(fill="both", expand=True)
+        self.app = Flask(__name__)
+        self._register_routes()
 
-        ttk.Label(frm, text="Guardian API Base URL").pack(anchor="w")
-        api_var = tk.StringVar(value=self.api_base)
-        ttk.Entry(frm, textvariable=api_var).pack(fill="x")
+    def _register_routes(self):
+        @self.app.get("/")
+        def index():
+            return render_template_string(
+                HTML,
+                api_base=self.api_base,
+                rag_modes=RAG_MODES,
+                rag_mode=self.rag_mode,
+                dry_run=self.dry_run,
+                prompt=self.prompt,
+                plan_json=json.dumps(self.plan_obj, indent=2),
+                mcp_server=self.mcp_server,
+                mcp_tool=self.mcp_tool,
+                mcp_args=json.dumps(self.mcp_args, indent=2),
+                msg="",
+                tools=self.mcp_tools_cache,
+            )
 
-        ttk.Label(frm, text="RAG Mode").pack(anchor="w", pady=(10,0))
-        rag_var = tk.StringVar(value="advanced")
-        ttk.Combobox(frm, textvariable=rag_var, values=RAG_MODES, state="readonly").pack(fill="x")
+        @self.app.post("/send")
+        def send():
+            self.api_base = request.form.get("api_base","").strip().rstrip("/") or DEFAULT_API
+            self.rag_mode = request.form.get("rag_mode","advanced").strip()
+            self.dry_run = bool_from_str(request.form.get("dry_run","true"))
+            self.prompt = request.form.get("prompt","").strip()
 
-        dry_run_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frm, text="Dry run (preview only, no execution)", variable=dry_run_var).pack(anchor="w", pady=(6,0))
-
-        ttk.Label(frm, text="Action Request (your prompt)").pack(anchor="w", pady=(10,0))
-        prompt = tk.Text(frm, height=7)
-        prompt.pack(fill="x")
-        prompt.insert("1.0", "Take a screenshot and then type 'Hello from the council' in the focused field.")
-
-        ttk.Label(frm, text="Proposed Plan (JSON) — executed only after council + your YES").pack(anchor="w", pady=(10,0))
-        plan_box = tk.Text(frm, height=16)
-        plan_box.pack(fill="both", expand=True)
-        plan_box.insert("1.0", json.dumps(DEFAULT_PLAN, indent=2))
-
-        # MCP tool helper UI
-        mcp_frame = ttk.LabelFrame(frm, text="MCP Tool Helper (optional)", padding=8)
-        mcp_frame.pack(fill="x", pady=(10,0))
-
-        ttk.Label(mcp_frame, text="Server").grid(row=0, column=0, sticky="w")
-        server_var = tk.StringVar(value="")
-        server_combo = ttk.Combobox(mcp_frame, textvariable=server_var, values=[], state="readonly", width=40)
-        server_combo.grid(row=0, column=1, sticky="we", padx=6)
-
-        ttk.Label(mcp_frame, text="Tool").grid(row=1, column=0, sticky="w", pady=(6,0))
-        tool_var = tk.StringVar(value="")
-        tool_combo = ttk.Combobox(mcp_frame, textvariable=tool_var, values=[], state="readonly", width=60)
-        tool_combo.grid(row=1, column=1, sticky="we", padx=6, pady=(6,0))
-
-        ttk.Label(mcp_frame, text="Args (JSON)").grid(row=2, column=0, sticky="nw", pady=(6,0))
-        args_box = tk.Text(mcp_frame, height=4)
-        args_box.grid(row=2, column=1, sticky="we", padx=6, pady=(6,0))
-        args_box.insert("1.0", json.dumps({"path":"README.md"}, indent=2))
-
-        mcp_frame.columnconfigure(1, weight=1)
-
-        status = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=status, foreground="blue").pack(anchor="w", pady=(8,0))
-
-        def _get_api():
-            self.api_base = api_var.get().strip().rstrip("/")
-            return self.api_base
-
-        def refresh_mcp():
-            api = _get_api()
-            status.set("Fetching MCP tools...")
-            def worker():
-                try:
-                    # sync snapshot first (optional)
-                    try:
-                        requests.post(api + "/mcp/sync", timeout=30)
-                    except Exception:
-                        pass
-                    r = requests.get(api + "/mcp/tools", timeout=30)
-                    r.raise_for_status()
-                    data = r.json()
-                    tools = data.get("tools") or {}
-                    servers = sorted(list(tools.keys()))
-                except Exception as e:
-                    root.after(0, lambda: status.set(f"MCP error: {e}"))
-                    return
-
-                def apply():
-                    server_combo["values"] = servers
-                    if servers:
-                        server_var.set(servers[0])
-                        tool_combo["values"] = tools.get(servers[0], [])
-                        if tools.get(servers[0]):
-                            tool_var.set(tools[servers[0]][0])
-                    status.set("MCP tools loaded.")
-                root.after(0, apply)
-            threading.Thread(target=worker, daemon=True).start()
-
-        def on_server_change(_evt=None):
-            api = _get_api()
+            plan_json = request.form.get("plan_json","").strip()
             try:
-                r = requests.get(api + "/mcp/tools", timeout=10)
-                data = r.json()
-                tools = data.get("tools") or {}
-                sv = server_var.get()
-                tool_combo["values"] = tools.get(sv, [])
-                if tools.get(sv):
-                    tool_var.set(tools[sv][0])
-            except Exception:
-                pass
-
-        server_combo.bind("<<ComboboxSelected>>", on_server_change)
-
-        def add_mcp_action():
-            try:
-                plan_obj = json.loads(plan_box.get("1.0", "end").strip())
+                self.plan_obj = json.loads(plan_json)
             except Exception as e:
-                messagebox.showerror("Invalid Plan JSON", str(e))
-                return
-            try:
-                args_obj = json.loads(args_box.get("1.0", "end").strip())
-            except Exception as e:
-                messagebox.showerror("Invalid Args JSON", str(e))
-                return
-            act = {
-                "name": "mcp_call",
-                "server": server_var.get(),
-                "tool": tool_var.get(),
-                "args": args_obj
-            }
-            plan_obj.setdefault("actions", [])
-            plan_obj["actions"].insert(0, act)  # put first by default
-            plan_box.delete("1.0", "end")
-            plan_box.insert("1.0", json.dumps(plan_obj, indent=2))
-            messagebox.showinfo("Added", "Inserted mcp_call action into plan (first action).")
-
-        def do_send():
-            api = _get_api()
-            try:
-                plan_obj = json.loads(plan_box.get("1.0", "end").strip())
-            except Exception as e:
-                messagebox.showerror("Invalid JSON", f"Proposed plan JSON is invalid:\n{e}")
-                return
+                return render_template_string(HTML, api_base=self.api_base, rag_modes=RAG_MODES, rag_mode=self.rag_mode,
+                                              dry_run=self.dry_run, prompt=self.prompt, plan_json=plan_json,
+                                              mcp_server=self.mcp_server, mcp_tool=self.mcp_tool,
+                                              mcp_args=json.dumps(self.mcp_args, indent=2),
+                                              msg=f"Invalid Plan JSON:\n{e}", tools=self.mcp_tools_cache)
 
             payload = {
-                "action_request": prompt.get("1.0", "end").strip(),
-                "proposed_plan": plan_obj,
-                "rag_mode": rag_var.get().strip(),
-                "dry_run": bool(dry_run_var.get())
+                "action_request": self.prompt,
+                "proposed_plan": self.plan_obj,
+                "rag_mode": self.rag_mode,
+                "dry_run": bool(self.dry_run),
             }
 
-            status.set("Sending to council...")
-            def worker():
-                try:
-                    r = requests.post(api + "/plan", json=payload, timeout=120)
-                    r.raise_for_status()
-                    data = r.json()
-                except Exception as e:
-                    root.after(0, lambda: status.set(f"Error: {e}"))
-                    return
-
+            try:
+                r = requests.post(self.api_base + "/plan", json=payload, timeout=300)
+                r.raise_for_status()
+                data = r.json()
                 msg = (
                     f"Status: {data.get('status')}\n"
                     f"Pending: {data.get('pending_id')}\n"
                     f"Approval code: {data.get('approval_code')}\n\n"
                     f"If Telegram/SMS is configured, you will be prompted to reply YES/NO."
                 )
-                root.after(0, lambda: messagebox.showinfo("Council Response", msg))
-                root.after(0, lambda: status.set("Done."))
-            threading.Thread(target=worker, daemon=True).start()
+            except Exception as e:
+                msg = f"Error calling /plan:\n{e}"
 
-        btn_row = ttk.Frame(frm)
-        btn_row.pack(fill="x", pady=(10,0))
-        ttk.Button(btn_row, text="Send to Council (/plan)", command=do_send).pack(side="left")
-        ttk.Button(btn_row, text="Close", command=root.destroy).pack(side="right")
+            return render_template_string(
+                HTML,
+                api_base=self.api_base,
+                rag_modes=RAG_MODES,
+                rag_mode=self.rag_mode,
+                dry_run=self.dry_run,
+                prompt=self.prompt,
+                plan_json=json.dumps(self.plan_obj, indent=2),
+                mcp_server=self.mcp_server,
+                mcp_tool=self.mcp_tool,
+                mcp_args=json.dumps(self.mcp_args, indent=2),
+                msg=msg,
+                tools=self.mcp_tools_cache,
+            )
 
-        mcp_btns = ttk.Frame(mcp_frame)
-        mcp_btns.grid(row=3, column=1, sticky="e", pady=(8,0))
-        ttk.Button(mcp_btns, text="Refresh MCP tools", command=refresh_mcp).pack(side="left", padx=4)
-        ttk.Button(mcp_btns, text="Add mcp_call action", command=add_mcp_action).pack(side="left", padx=4)
+        @self.app.get("/mcp_refresh")
+        def mcp_refresh():
+            msg = "Fetching MCP tools..."
+            try:
+                # sync snapshot first (optional)
+                try:
+                    requests.post(self.api_base + "/mcp/sync", timeout=30)
+                except Exception:
+                    pass
+                r = requests.get(self.api_base + "/mcp/tools", timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                tools = data.get("tools") or {}
+                self.mcp_tools_cache = tools
 
-        root.mainloop()
+                # pick first server/tool as defaults
+                servers = sorted(list(tools.keys()))
+                if servers:
+                    self.mcp_server = servers[0]
+                    if tools.get(self.mcp_server):
+                        self.mcp_tool = tools[self.mcp_server][0]
+                msg = "MCP tools loaded."
+            except Exception as e:
+                msg = f"MCP error: {e}"
 
-    def run(self):
-        icon = pystray.Icon(
-            "CouncilGuardian",
-            make_icon(),
-            "Council Guardian",
-            menu=pystray.Menu(
-                pystray.MenuItem("Send Prompt…", lambda: threading.Thread(target=self.open_window, daemon=True).start()),
-                pystray.MenuItem("Quit", lambda: icon.stop()),
-            ),
-        )
-        icon.run()
+            return render_template_string(
+                HTML,
+                api_base=self.api_base,
+                rag_modes=RAG_MODES,
+                rag_mode=self.rag_mode,
+                dry_run=self.dry_run,
+                prompt=self.prompt,
+                plan_json=json.dumps(self.plan_obj, indent=2),
+                mcp_server=self.mcp_server,
+                mcp_tool=self.mcp_tool,
+                mcp_args=json.dumps(self.mcp_args, indent=2),
+                msg=msg,
+                tools=self.mcp_tools_cache,
+            )
+
+        @self.app.get("/mcp_add")
+        def mcp_add():
+            msg = ""
+            try:
+                act = {
+                    "name": "mcp_call",
+                    "server": self.mcp_server,
+                    "tool": self.mcp_tool,
+                    "args": self.mcp_args,
+                }
+                self.plan_obj.setdefault("actions", [])
+                self.plan_obj["actions"].insert(0, act)
+                msg = "Inserted mcp_call action into plan (first action)."
+            except Exception as e:
+                msg = f"Failed to add mcp_call: {e}"
+
+            return render_template_string(
+                HTML,
+                api_base=self.api_base,
+                rag_modes=RAG_MODES,
+                rag_mode=self.rag_mode,
+                dry_run=self.dry_run,
+                prompt=self.prompt,
+                plan_json=json.dumps(self.plan_obj, indent=2),
+                mcp_server=self.mcp_server,
+                mcp_tool=self.mcp_tool,
+                mcp_args=json.dumps(self.mcp_args, indent=2),
+                msg=msg,
+                tools=self.mcp_tools_cache,
+            )
+
+        @self.app.get("/close")
+        def close():
+            return "<script>window.close();</script>"
+
+    def serve(self, host="127.0.0.1", port=8799):
+        self.app.run(host=host, port=port, debug=False, use_reloader=False)
+
+class CouncilTray(rumps.App):
+    def __init__(self):
+        super().__init__("Council", quit_button=None)
+        self.ui = TrayWebUI()
+        self.web_port = int(os.getenv("TRAY_WEB_PORT", "8799"))
+
+        self.menu = [
+            rumps.MenuItem("Send Prompt…", callback=self.open_prompt),
+            rumps.MenuItem("Open API Docs", callback=self.open_docs),
+            None,
+            rumps.MenuItem("Quit", callback=self.quit_app),
+        ]
+
+        # start local web UI in background
+        t = threading.Thread(target=self.ui.serve, kwargs={"port": self.web_port}, daemon=True)
+        t.start()
+
+    def open_prompt(self, _):
+        webbrowser.open(f"http://127.0.0.1:{self.web_port}/")
+
+    def open_docs(self, _):
+        webbrowser.open(self.ui.api_base + "/docs")
+
+    def quit_app(self, _):
+        rumps.quit_application()
 
 if __name__ == "__main__":
-    App().run()
+    CouncilTray().run()
