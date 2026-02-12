@@ -233,7 +233,7 @@ def call_plan(action_request: str) -> dict:
         "dry_run": True,  # <-- forced true
     }
 
-    resp = requests.post(PLAN_ENDPOINT, json=payload, timeout=300)
+    resp = requests.post(PLAN_ENDPOINT, json=payload, headers={"X-Caller": "news_prayer_loop"}, timeout=300)
     resp.raise_for_status()
     return resp.json()
 
