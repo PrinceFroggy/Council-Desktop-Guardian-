@@ -16,9 +16,9 @@ import json
 
 import streamlit as st
 
-from ..config import settings
-from ..redis_store import get_redis
-from ..trading import PORTFOLIO_KEY, TRADES_KEY
+from app.config import settings
+from app.redis_store import get_redis
+from app.trading import PORTFOLIO_KEY, TRADES_KEY
 
 
 def _loads(b, default):
