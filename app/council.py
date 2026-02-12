@@ -2,16 +2,25 @@ import os
 import json
 from typing import Any, Dict, List, Tuple
 
-from .prompts import COUNCIL_SYSTEM, SECURITY_REVIEWER, ETHICS_REVIEWER, CODE_REVIEWER, ARBITER
+from .prompts import (
+    COUNCIL_SYSTEM,
+    SECURITY_REVIEWER,
+    ETHICS_REVIEWER,
+    CODE_REVIEWER,
+    ARBITER,
+)
 from .security import looks_like_prompt_injection, scrub_secrets
 
+
 DEFAULT_REVIEWER_ROLES = ["security", "ethics", "code"]
+
 
 def _env_list(name: str, default: List[str]) -> List[str]:
     raw = os.getenv(name, "").strip()
     if not raw:
         return default
     return [x.strip() for x in raw.split(",") if x.strip()]
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name, "").strip().lower()
@@ -21,6 +30,7 @@ def _env_bool(name: str, default: bool) -> bool:
         return False
     return default
 
+
 def load_policy_rules() -> str:
     here = os.path.dirname(__file__)
     p = os.path.join(here, "policy_rules.txt")
@@ -29,14 +39,16 @@ def load_policy_rules() -> str:
     except Exception:
         return ""
 
+
 def _safe_json_extract(s: str) -> Dict[str, Any]:
     try:
         return json.loads(s)
     except Exception:
         start, end = s.find("{"), s.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(s[start:end+1])
+            return json.loads(s[start : end + 1])
     raise ValueError("Model did not return valid JSON")
+
 
 class Council:
     def __init__(self, providers: dict):
@@ -56,16 +68,25 @@ class Council:
                     "verdict": "NO",
                     "risk_level": "HIGH",
                     "reasons": ["Suspected prompt injection in request."],
-                    "required_changes": ["Rewrite request plainly; remove override language."],
-                    "message_to_human": "Rejected due to suspected prompt injection."
+                    "required_changes": [
+                        "Rewrite request plainly; remove override language."
+                    ],
+                    "message_to_human": "Rejected due to suspected prompt injection.",
                 },
-                "council": []
+                "council": [],
             }
 
         policy = load_policy_rules()
-        ctx = "\n\n".join([f"[FILE: {c['path']}] (UNTRUSTED)\n{c['content']}" for c in rag_context])
 
-        packet = scrub_secrets(f"""POLICY RULES (authoritative):
+        ctx = "\n\n".join(
+            [
+                f"[FILE: {c['path']}] (UNTRUSTED)\n{c['content']}"
+                for c in rag_context
+            ]
+        )
+
+        packet = scrub_secrets(
+            f"""POLICY RULES (authoritative):
 {policy}
 
 TASK REQUEST (untrusted user input):
@@ -78,75 +99,99 @@ PROPOSED PLAN (untrusted until approved):
 {json.dumps(proposed_plan, ensure_ascii=False)}
 
 Return JSON only.
-""")
+"""
+        )
 
         results: List[Dict[str, Any]] = []
 
-        # Which roles to run?
         roles = _env_list("COUNCIL_ROLES", DEFAULT_REVIEWER_ROLES)
         use_arbiter = _env_bool("COUNCIL_USE_ARBITER", True)
 
-        # Role prompt mapping
         role_prompt = {
             "security": SECURITY_REVIEWER,
             "ethics": ETHICS_REVIEWER,
             "code": CODE_REVIEWER,
         }
 
-        # Helper to choose provider/model per role index safely
         def pick_provider_model(idx: int) -> Tuple[str, str]:
             if not provider_plan:
                 raise ValueError("provider_plan is empty")
             if idx < len(provider_plan):
                 return provider_plan[idx]
-            # If fewer entries than roles, reuse the last one
             return provider_plan[-1]
 
-        # Run selected reviewers
         reviewer_index_map = {"security": 0, "ethics": 1, "code": 2}
+
         for role in roles:
             if role not in role_prompt:
                 continue
+
             prov, model = pick_provider_model(reviewer_index_map[role])
-            raw = self.providers[prov].chat(COUNCIL_SYSTEM + "\n\n" + role_prompt[role], packet, model)
+
+            raw = self.providers[prov].chat(
+                COUNCIL_SYSTEM + "\n\n" + role_prompt[role],
+                packet,
+                model,
+            )
+
             parsed = _safe_json_extract(raw)
-            results.append({"role": role, "provider": prov, "model": model, "result": parsed})
+
+            results.append(
+                {
+                    "role": role,
+                    "provider": prov,
+                    "model": model,
+                    "result": parsed,
+                }
+            )
 
         # Final decision
         if use_arbiter and len(provider_plan) >= 4:
             prov, model = provider_plan[3]
+
             arb_raw = self.providers[prov].chat(
                 COUNCIL_SYSTEM + "\n\n" + ARBITER,
-                "Council results JSON (UNTRUSTED):\n" + json.dumps(results, ensure_ascii=False) + "\n\nReturn final JSON only.",
-                model
+                "Council results JSON (UNTRUSTED):\n"
+                + json.dumps(results, ensure_ascii=False)
+                + "\n\nReturn final JSON only.",
+                model,
             )
-            final = _safe_json_extract(arb_raw)
-        else:
-            # No arbiter: compute a simple final based on results
-            # If any reviewer says NO => NO, else YES
-            verdicts = [str((r.get("result") or {}).get("verdict", "NO")).strip().upper() for r in results]
 
-	    def _normalize_risk_level(v) -> str:
-    		# Accept "LOW/MEDIUM/HIGH", or ints like 0/1/2/3
-    		if v is None:
-        	    return "LOW"
-    		if isinstance(v, (int, float)):
-        	    # Map numbers to strings (tweak if your app uses a different convention)
-        	    if v >= 3:
-            		return "HIGH"
-        	    if v == 2:
-            		return "MEDIUM"
-        	    return "LOW"
-    		return str(v).strip().upper()
+            final = _safe_json_extract(arb_raw)
+
+        else:
+            verdicts = [
+                str((r.get("result") or {}).get("verdict", "NO")).strip().upper()
+                for r in results
+            ]
+
+            def _normalize_risk_level(v) -> str:
+                if v is None:
+                    return "LOW"
+
+                if isinstance(v, (int, float)):
+                    if v >= 3:
+                        return "HIGH"
+                    if v == 2:
+                        return "MEDIUM"
+                    return "LOW"
+
+                return str(v).strip().upper()
 
             worst_risk = "LOW"
-	    for r in results:
-    		rl = _normalize_risk_level((r.get("result") or {}).get("risk_level"))
-    	    if rl == "HIGH":
-        	worst_risk = "HIGH"
-        	break
-    	    if rl == "MEDIUM" and worst_risk != "HIGH":
-        	worst_risk = "MEDIUM"
+
+            for r in results:
+                rl = _normalize_risk_level(
+                    (r.get("result") or {}).get("risk_level")
+                )
+
+                if rl == "HIGH":
+                    worst_risk = "HIGH"
+                    break
+
+                if rl == "MEDIUM" and worst_risk != "HIGH":
+                    worst_risk = "MEDIUM"
+
             final = {
                 "verdict": "NO" if "NO" in verdicts else "YES",
                 "risk_level": worst_risk,
