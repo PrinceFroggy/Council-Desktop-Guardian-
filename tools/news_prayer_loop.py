@@ -49,7 +49,7 @@ NEWS_POLL_INTERVAL_SECONDS = int(os.getenv("NEWS_POLL_INTERVAL_SECONDS", "300"))
 
 PLAN_ENDPOINT = os.getenv("PLAN_ENDPOINT", "http://localhost:7070/plan").strip()
 
-RAG_MODE = os.getenv("NEWS_RAG_MODE", os.getenv("RAG_MODE", "naive")).strip()
+RAG_MODE = os.getenv("NEWS_RAG_MODE", os.getenv("RAG_MODE", "finetune")).strip()
 
 # Always keep this safe by default
 DRY_RUN = True
@@ -275,38 +275,20 @@ def main():
 
                 # Keep prompt strict and JSON-only. Also: WATCH/PASS only to reduce council rejection.
                 prompt = f"""
-You must output ONLY JSON (no markdown, no extra text).
+Create a cautious NEWS BRIEFING for a human.
 
-You are given:
-- validated_tickers: REAL tickers validated by market lookup. You MUST NOT invent symbols.
-- news_snippets: brief bullets.
+Constraints:
+- No trading, no orders, no “buy/sell” recommendations.
+- Only allow actions: WATCH or PASS.
+- Choose up to 3 tickers ONLY from this validated list (do not invent tickers): {tickers_line or "(none)"}
+- If the validated list is empty, do not suggest any tickers.
 
-Your job:
-1) Choose up to 3 tickers from validated_tickers that are most impacted by the news.
-2) For each chosen ticker, return:
-   - ticker
-   - direction: "bullish" | "bearish" | "unclear"
-   - confidence: 0-100 (integer)
-   - action: "WATCH" | "PASS"  (be conservative; no investing)
-   - reason: one short sentence
-3) message_to_human: <= 900 characters. Include:
-   - 3-5 key headlines (short)
-   - top ticker + action + confidence
-   - ask me to reply YES/NO for approval
+Include in your message:
+- 3–5 key headlines (very short)
+- The top ticker (if any) + WATCH/PASS + confidence (0–100)
+- Ask me to reply YES/NO if I want to continue monitoring.
 
-Rules:
-- If validated_tickers is empty, signals MUST be [].
-- Return JSON only.
-
-Return this exact JSON schema:
-{{
-  "signals":[{{"ticker":"AAPL","direction":"bullish","confidence":65,"action":"WATCH","reason":"..."}}],
-  "message_to_human":"..."
-}}
-
-validated_tickers: [{tickers_line}]
-
-news_snippets:
+News snippets:
 {fresh_block}
 """.strip()
 
