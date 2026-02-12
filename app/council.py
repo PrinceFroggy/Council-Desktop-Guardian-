@@ -5,6 +5,22 @@ from typing import Any, Dict, List, Tuple
 from .prompts import COUNCIL_SYSTEM, SECURITY_REVIEWER, ETHICS_REVIEWER, CODE_REVIEWER, ARBITER
 from .security import looks_like_prompt_injection, scrub_secrets
 
+DEFAULT_REVIEWER_ROLES = ["security", "ethics", "code"]
+
+def _env_list(name: str, default: List[str]) -> List[str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "y", "on"):
+        return True
+    if raw in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
 def load_policy_rules() -> str:
     here = os.path.dirname(__file__)
     p = os.path.join(here, "policy_rules.txt")
@@ -64,33 +80,65 @@ PROPOSED PLAN (untrusted until approved):
 Return JSON only.
 """)
 
-        results = []
+        results: List[Dict[str, Any]] = []
 
-        # 1) Security
-        prov, model = provider_plan[0]
-        sec_raw = self.providers[prov].chat(COUNCIL_SYSTEM + "\n\n" + SECURITY_REVIEWER, packet, model)
-        sec = _safe_json_extract(sec_raw)
-        results.append({"role": "security", "provider": prov, "model": model, "result": sec})
+        # Which roles to run?
+        roles = _env_list("COUNCIL_ROLES", DEFAULT_REVIEWER_ROLES)
+        use_arbiter = _env_bool("COUNCIL_USE_ARBITER", True)
 
-        # 2) Ethics
-        prov, model = provider_plan[1]
-        eth_raw = self.providers[prov].chat(COUNCIL_SYSTEM + "\n\n" + ETHICS_REVIEWER, packet, model)
-        eth = _safe_json_extract(eth_raw)
-        results.append({"role": "ethics", "provider": prov, "model": model, "result": eth})
+        # Role prompt mapping
+        role_prompt = {
+            "security": SECURITY_REVIEWER,
+            "ethics": ETHICS_REVIEWER,
+            "code": CODE_REVIEWER,
+        }
 
-        # 3) Code
-        prov, model = provider_plan[2]
-        code_raw = self.providers[prov].chat(COUNCIL_SYSTEM + "\n\n" + CODE_REVIEWER, packet, model)
-        code = _safe_json_extract(code_raw)
-        results.append({"role": "code", "provider": prov, "model": model, "result": code})
+        # Helper to choose provider/model per role index safely
+        def pick_provider_model(idx: int) -> Tuple[str, str]:
+            if not provider_plan:
+                raise ValueError("provider_plan is empty")
+            if idx < len(provider_plan):
+                return provider_plan[idx]
+            # If fewer entries than roles, reuse the last one
+            return provider_plan[-1]
 
-        # 4) Arbiter
-        prov, model = provider_plan[3]
-        arb_raw = self.providers[prov].chat(
-            COUNCIL_SYSTEM + "\n\n" + ARBITER,
-            "Council results JSON (UNTRUSTED):\n" + json.dumps(results, ensure_ascii=False) + "\n\nReturn final JSON only.",
-            model
-        )
-        final = _safe_json_extract(arb_raw)
+        # Run selected reviewers
+        reviewer_index_map = {"security": 0, "ethics": 1, "code": 2}
+        for role in roles:
+            if role not in role_prompt:
+                continue
+            prov, model = pick_provider_model(reviewer_index_map[role])
+            raw = self.providers[prov].chat(COUNCIL_SYSTEM + "\n\n" + role_prompt[role], packet, model)
+            parsed = _safe_json_extract(raw)
+            results.append({"role": role, "provider": prov, "model": model, "result": parsed})
+
+        # Final decision
+        if use_arbiter and len(provider_plan) >= 4:
+            prov, model = provider_plan[3]
+            arb_raw = self.providers[prov].chat(
+                COUNCIL_SYSTEM + "\n\n" + ARBITER,
+                "Council results JSON (UNTRUSTED):\n" + json.dumps(results, ensure_ascii=False) + "\n\nReturn final JSON only.",
+                model
+            )
+            final = _safe_json_extract(arb_raw)
+        else:
+            # No arbiter: compute a simple final based on results
+            # If any reviewer says NO => NO, else YES
+            verdicts = [(r.get("result") or {}).get("verdict", "NO") for r in results]
+            worst_risk = "LOW"
+            for r in results:
+                rl = ((r.get("result") or {}).get("risk_level") or "LOW").upper()
+                if rl == "HIGH":
+                    worst_risk = "HIGH"
+                    break
+                if rl == "MEDIUM":
+                    worst_risk = "MEDIUM"
+            final = {
+                "verdict": "NO" if "NO" in verdicts else "YES",
+                "risk_level": worst_risk,
+                "reasons": ["Arbiter disabled; using reviewer votes."],
+                "required_changes": [],
+                "message_to_human": None,
+            }
 
         return {"final": final, "council": results}
