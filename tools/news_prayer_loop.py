@@ -51,38 +51,72 @@ TICKER_STOPWORDS = {
     "EPS", "CEO", "CFO", "SEC"
 }
 
-TICKER_CANDIDATE_RE = re.compile(
-    r"\b([A-Z]{1,5}(?:\.[A-Z])?|\d{4,6}\.[A-Z]{2}|[A-Z]{1,4}\.[A-Z]{1,3})\b"
-)
+# Only extract tickers that appear like tickers in text:
+# - $AAPL
+# - (AAPL)
+# - NASDAQ: AAPL
+# - NYSE: TSLA
+# - Ticker: AAPL
+# - 005930.KS / SHOP.TO
+TICKER_PATTERNS = [
+    re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b"),
+    re.compile(r"\(([A-Z]{1,5}(?:\.[A-Z])?)\)"),
+    re.compile(r"\b(?:NASDAQ|NYSE|AMEX)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b"),
+    re.compile(r"\b(?:Ticker|Symbol)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b", re.IGNORECASE),
+    re.compile(r"\b(\d{4,6}\.[A-Z]{2})\b"),      # 005930.KS
+    re.compile(r"\b([A-Z]{1,4}\.[A-Z]{1,3})\b"), # SHOP.TO
+]
 
 
 def extract_ticker_candidates(text: str) -> list[str]:
-    cands = []
-    for m in TICKER_CANDIDATE_RE.findall(text.upper()):
-        if m not in TICKER_STOPWORDS:
-            cands.append(m)
+    text_up = text.upper()
+    found = []
 
-    seen = set()
+    for rx in TICKER_PATTERNS:
+        found.extend(rx.findall(text_up))
+
+    # de-dupe + filter stopwords
     out = []
-    for s in cands:
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
+    seen = set()
+    for sym in found:
+        sym = sym.strip().upper()
+        if sym in TICKER_STOPWORDS:
+            continue
+        if sym not in seen:
+            seen.add(sym)
+            out.append(sym)
+
     return out
 
 
-def validate_tickers(cands: list[str], limit: int = 10) -> list[str]:
+def validate_tickers(cands: list[str], limit: int = 8) -> list[str]:
+    """
+    Fast validation:
+    - Use yfinance fast_info where possible
+    - Avoid long history calls (slow + noisy)
+    """
     valid = []
     for sym in cands:
         if len(valid) >= limit:
             break
         try:
             t = yf.Ticker(sym)
-            hist = t.history(period="1d")
+            fi = getattr(t, "fast_info", None)
+
+            # fast_info sometimes triggers network; if it exists and has any market fields, accept
+            if fi and (fi.get("last_price") is not None or fi.get("currency") is not None):
+                valid.append(sym)
+                continue
+
+            # fallback: tiny history request but keep it minimal
+            hist = t.history(period="5d", interval="1d")
             if hist is not None and len(hist) > 0:
                 valid.append(sym)
+
         except Exception:
+            # swallow everything; don't print
             pass
+
     return valid
 
 
@@ -206,10 +240,22 @@ def main():
                 valid_tickers = validate_tickers(candidates, limit=8)
 
                 fresh_block, fresh_ids = build_snippet_block(fresh_articles)
+		top5 = fresh_articles[:5]
+		top5_lines = []
+		for a in top5:
+    			title = (a.get("title") or "").strip()
+    			src = ((a.get("source") or {}) or {}).get("name") or ""
+    			top5_lines.append(f"- {title}" + (f" ({src})" if src else ""))
+		top5_block = "\n".join(top5_lines)
+
                 tickers_line = ", ".join(valid_tickers) if valid_tickers else "(none found)"
 
                 prompt = f"""
 You must output ONLY JSON.
+- If validated_tickers is empty, signals must be [] (empty list).
+
+Key headlines (top 5):
+{top5_block}
 
 validated_tickers: [{tickers_line}]
 
