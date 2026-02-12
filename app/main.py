@@ -12,7 +12,7 @@ from .rag import RAG
 from .repo_indexer import index_repo
 from .rag_modes import get_context
 from .cache import cag_set
-from .llm_providers import build_providers
+from .llm_providers import providers
 from .council import Council
 from .notify import telegram_send
 from .desktop_actions import execute_action
@@ -34,7 +34,7 @@ load_dotenv()
 app = FastAPI()
 
 r = get_redis(settings.REDIS_URL)
-providers = build_providers(settings.OLLAMA_HOST)
+providers = load_providers()
 rag = RAG(r)
 ensure_vector_index(r, rag.dim)
 council = Council(providers)
