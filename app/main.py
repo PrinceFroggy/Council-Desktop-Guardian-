@@ -109,7 +109,7 @@ def index():
     return {"ok": True}
 
 @app.post("/plan")
-def plan(req: PlanRequest):
+def plan(req: PlanRequest, request: Request):
     ctx_obj = get_context(rag, r, providers["ollama"], "llama3.1:8b", req.action_request, req.rag_mode)
     # normalize to list of chunks for council (best effort)
     ctx = ctx_obj.get("chunks") or []
@@ -160,15 +160,52 @@ def plan(req: PlanRequest):
         except Exception:
             pass
 
+    caller = "unknown"
+    try:
+        # If you later add Request injection, you'll read headers.
+        # For now, caller stays "unknown".
+        caller = request.headers.get("X-Caller", "unknown")
+    except Exception:
+        pass
+
     if blob["status"] == "WAITING_HUMAN":
         msg = verdict["final"].get("message_to_human") or json.dumps(verdict["final"], ensure_ascii=False)
         telegram_send(
-            f"Council approved (pending human).\nApproval code: {code}\nPending: {pending_id}\n\n{msg}\n\nReply: YES {code} or NO {code}"
+            f"[{caller}] Council approved (pending human).\n"
+            f"Approval code: {code}\n"
+            f"Pending: {pending_id}\n\n"
+            f"{msg}\n\n"
+            f"Reply: YES {code} or NO {code}"
         )
+
     elif blob["status"] == "DRY_RUN":
-        preview = "\n".join(blob.get("execution_preview") or [])
+        preview = "\n".join(blob.get("execution_preview") or []) or "(no actions)"
+        msg = verdict["final"].get("message_to_human") or ""
         telegram_send(
-            f"Dry run preview (no execution).\nPending: {pending_id}\n\nPlanned actions:\n{preview}\n\nIf you want to execute, resend the same request with dry_run=false."
+            f"[{caller}] Dry run preview (no execution).\n"
+            f"Pending: {pending_id}\n\n"
+            f"{msg}\n\n"
+            f"Planned actions:\n{preview}\n\n"
+            f"If you want to execute, resend with dry_run=false."
+        )
+
+    elif blob["status"] == "REJECTED_BY_COUNCIL":
+        # NEW: Send rejection details to Telegram so you see why it failed.
+        final = verdict.get("final") or {}
+        reasons = final.get("reasons") or []
+        required = final.get("required_changes") or []
+        msg = final.get("message_to_human") or ""
+
+        reasons_txt = "\n".join([f"- {r}" for r in reasons]) or "(no reasons)"
+        required_txt = "\n".join([f"- {r}" for r in required]) or "(none)"
+
+        telegram_send(
+            f"[{caller}] Council REJECTED the request.\n"
+            f"Pending: {pending_id}\n"
+            f"Approval code: {code}\n\n"
+            f"Reasons:\n{reasons_txt}\n\n"
+            f"Required changes:\n{required_txt}\n\n"
+            f"{msg}"
         )
 
     return {"pending_id": pending_id, "status": blob["status"], "approval_code": code, "verdict": verdict, "execution_preview": blob.get("execution_preview")}
