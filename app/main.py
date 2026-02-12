@@ -40,7 +40,7 @@ ensure_vector_index(r, rag.dim)
 council = Council(providers)
 
 # MCP registry (optional)
-_mcp = MCPRegistry(config_path=os.path.join(os.path.dirname(__file__), 'mcp_servers.json'))
+_mcp = MCPRegistry(config_path=os.path.join(os.path.dirname(__file__), "mcp_servers.json"))
 try:
     _mcp.load()
 except Exception:
@@ -59,15 +59,18 @@ try:
 except Exception:
     pass
 
+
 class _AuthRequest(BaseModel):
     email: str
     password: str
+
 
 class PlanRequest(BaseModel):
     action_request: str
     proposed_plan: dict
     rag_mode: str = "naive"  # naive|advanced|graphrag|agentic|finetune|cag
-  # {"type":"desktop","actions":[...]} etc.
+    # {"type":"desktop","actions":[...]} etc.
+
 
 def _preview_actions(plan: dict) -> list[str]:
     actions = (plan or {}).get("actions", []) or []
@@ -76,41 +79,55 @@ def _preview_actions(plan: dict) -> list[str]:
         name = act.get("name")
         if name == "type_text":
             txt = (act.get("text") or "")
-            out.append(f"{i+1}. type_text: {txt[:60]}{'...' if len(txt)>60 else ''}")
+            out.append(f"{i+1}. type_text: {txt[:60]}{'...' if len(txt) > 60 else ''}")
         elif name == "hotkey":
             out.append(f"{i+1}. hotkey: {act.get('keys')}")
         elif name == "click":
-            out.append(f"{i+1}. click: x={act.get('x')} y={act.get('y')} button={act.get('button','left')}")
+            out.append(
+                f"{i+1}. click: x={act.get('x')} y={act.get('y')} button={act.get('button','left')}"
+            )
         elif name == "move_mouse":
-            out.append(f"{i+1}. move_mouse: x={act.get('x')} y={act.get('y')} duration={act.get('duration',0.2)}")
+            out.append(
+                f"{i+1}. move_mouse: x={act.get('x')} y={act.get('y')} duration={act.get('duration',0.2)}"
+            )
         elif name == "screenshot":
             out.append(f"{i+1}. screenshot: path={act.get('path','screenshot.png')}")
         elif name == "mcp_call":
-            out.append(f"{i+1}. mcp_call: {act.get('server')}:{act.get('tool')} args={act.get('args')}")
+            out.append(
+                f"{i+1}. mcp_call: {act.get('server')}:{act.get('tool')} args={act.get('args')}"
+            )
         elif name == "shell_exec":
             out.append(f"{i+1}. shell_exec: {act.get('cmd')}")
         elif name == "fs_read":
             out.append(f"{i+1}. fs_read: path={act.get('path')}")
         elif name == "fs_write":
-            out.append(f"{i+1}. fs_write: path={act.get('path')} bytes≈{len((act.get('content') or '').encode('utf-8'))}")
+            out.append(
+                f"{i+1}. fs_write: path={act.get('path')} bytes≈{len((act.get('content') or '').encode('utf-8'))}"
+            )
         elif name == "web_fetch":
             out.append(f"{i+1}. web_fetch: url={act.get('url')}")
         else:
             out.append(f"{i+1}. {name}: {act}")
     return out
 
+
 def _approval_code(n=8) -> str:
     import random, string
+
     return "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(n))
+
 
 @app.post("/index")
 def index():
     index_repo(settings.REPO_PATH, rag, redis_client=r)
     return {"ok": True}
 
+
 @app.post("/plan")
 def plan(req: PlanRequest, request: Request):
-    ctx_obj = get_context(rag, r, providers["ollama"], "llama3.1:8b", req.action_request, req.rag_mode)
+    ctx_obj = get_context(
+        rag, r, providers["ollama"], "llama3.1:8b", req.action_request, req.rag_mode
+    )
     # normalize to list of chunks for council (best effort)
     ctx = ctx_obj.get("chunks") or []
     if not ctx and ctx_obj.get("mode") == "agentic":
@@ -120,7 +137,6 @@ def plan(req: PlanRequest, request: Request):
     if ctx_obj.get("mode") == "cag" and ctx_obj.get("cached"):
         # if cached council response exists, return it directly
         return ctx_obj["cached"]
-
 
     provider_plan = [
         ("ollama", "qwen2.5-coder:7b"),
@@ -133,7 +149,7 @@ def plan(req: PlanRequest, request: Request):
         action_request=req.action_request,
         rag_context=ctx,
         proposed_plan=req.proposed_plan,
-        provider_plan=provider_plan
+        provider_plan=provider_plan,
     )
 
     pending_id = f"pending:{int(time.time())}:{uuid.uuid4().hex[:6]}"
@@ -143,7 +159,18 @@ def plan(req: PlanRequest, request: Request):
         "pending_id": pending_id,
         "approval_code": code,
         "created_at": time.time(),
-        "status": ("DRY_RUN" if (bool(getattr(req, "dry_run", False)) and verdict["final"].get("verdict") == "YES") else ("WAITING_HUMAN" if verdict["final"].get("verdict") == "YES" else "REJECTED_BY_COUNCIL")),
+        "status": (
+            "DRY_RUN"
+            if (
+                bool(getattr(req, "dry_run", False))
+                and verdict["final"].get("verdict") == "YES"
+            )
+            else (
+                "WAITING_HUMAN"
+                if verdict["final"].get("verdict") == "YES"
+                else "REJECTED_BY_COUNCIL"
+            )
+        ),
         "rag": ctx_obj,
         "verdict": verdict,
         "proposed_plan": req.proposed_plan,
@@ -156,7 +183,18 @@ def plan(req: PlanRequest, request: Request):
     if req.rag_mode.lower() == "cag":
         # cache the full response object (so repeated prompts behave consistently)
         try:
-            cag_set(r, prompt=req.action_request, rag_mode="cag", response_obj={"pending_id": pending_id, "status": blob["status"], "approval_code": code, "verdict": verdict, "rag": ctx_obj})
+            cag_set(
+                r,
+                prompt=req.action_request,
+                rag_mode="cag",
+                response_obj={
+                    "pending_id": pending_id,
+                    "status": blob["status"],
+                    "approval_code": code,
+                    "verdict": verdict,
+                    "rag": ctx_obj,
+                },
+            )
         except Exception:
             pass
 
@@ -169,7 +207,9 @@ def plan(req: PlanRequest, request: Request):
         pass
 
     if blob["status"] == "WAITING_HUMAN":
-        msg = verdict["final"].get("message_to_human") or json.dumps(verdict["final"], ensure_ascii=False)
+        msg = verdict["final"].get("message_to_human") or json.dumps(
+            verdict["final"], ensure_ascii=False
+        )
         telegram_send(
             f"[{caller}] Council approved (pending human).\n"
             f"Approval code: {code}\n"
@@ -208,7 +248,14 @@ def plan(req: PlanRequest, request: Request):
             f"{msg}"
         )
 
-    return {"pending_id": pending_id, "status": blob["status"], "approval_code": code, "verdict": verdict, "execution_preview": blob.get("execution_preview")}
+    return {
+        "pending_id": pending_id,
+        "status": blob["status"],
+        "approval_code": code,
+        "verdict": verdict,
+        "execution_preview": blob.get("execution_preview"),
+    }
+
 
 @app.get("/status/{pending_id}")
 def status(pending_id: str):
@@ -216,6 +263,7 @@ def status(pending_id: str):
     if not data:
         return {"error": "not found"}
     return json.loads(data.decode())
+
 
 @app.post("/execute/{pending_id}")
 def execute(pending_id: str):
@@ -229,6 +277,8 @@ def execute(pending_id: str):
     if blob["status"] != "APPROVED":
         return {"error": f"not approved (status={blob['status']})"}
 
+    plan = _unwrap_plan(blob)
+
     plan = blob.get("proposed_plan") or {}
     plan_type = plan.get("type") or "desktop"
     if plan_type not in ("desktop", "trading"):
@@ -238,6 +288,8 @@ def execute(pending_id: str):
 
     results = []
     for act in plan.get("actions", []):
+        results.append(execute_action(act))
+
         if act.get("name") == "mcp_call":
             server = act.get("server")
             tool = act.get("tool")
@@ -246,7 +298,9 @@ def execute(pending_id: str):
                 validate_mcp_call(settings.REPO_PATH, server, tool, args)
                 res = _mcp.call_tool(server, tool, args)
                 results.append(f"mcp_call {server}:{tool} OK")
-                blob.setdefault("mcp_results", []).append({"server": server, "tool": tool, "result": res})
+                blob.setdefault("mcp_results", []).append(
+                    {"server": server, "tool": tool, "result": res}
+                )
             except MCPPolicyError as pe:
                 raise RuntimeError(f"Rejected by MCP policy: {pe}")
             except Exception as e:
@@ -255,7 +309,9 @@ def execute(pending_id: str):
 
         if act.get("name") == "shell_exec":
             cmd = act.get("cmd") or ""
-            res = run_shell(settings.REPO_PATH, cmd, timeout_seconds=int(act.get("timeout_seconds", 60)))
+            res = run_shell(
+                settings.REPO_PATH, cmd, timeout_seconds=int(act.get("timeout_seconds", 60))
+            )
             results.append(f"shell_exec rc={res['returncode']}")
             blob.setdefault("shell_results", []).append({"cmd": cmd, "result": res})
             continue
@@ -279,59 +335,71 @@ def execute(pending_id: str):
             url = act.get("url") or ""
             res = fetch_url(url)
             results.append("web_fetch OK")
-            blob.setdefault("web_fetches", []).append({
-                "url": url,
-                "status": res.get("status"),
-                "truncated": res.get("truncated"),
-            })
+            blob.setdefault("web_fetches", []).append(
+                {
+                    "url": url,
+                    "status": res.get("status"),
+                    "truncated": res.get("truncated"),
+                }
+            )
             # store content separately to avoid bloating telegram
             blob.setdefault("web_pages", []).append(res)
             continue
 
         if act.get("name") == "paper_trade":
             from .trading import apply_paper_trade
+
             ticker = act.get("ticker") or ""
             side = act.get("side") or ""
             qty = act.get("qty") or 0
             price = act.get("price") or 0
             if act.get("requires_quote") and not act.get("price_confirmed"):
-                results.append("paper_trade DENIED: requires_quote=true. Re-plan with a real quote price and price_confirmed=true.")
+                results.append(
+                    "paper_trade DENIED: requires_quote=true. Re-plan with a real quote price and price_confirmed=true."
+                )
                 blob.setdefault("trade_errors", []).append({"ticker": ticker, "error": "requires_quote"})
                 continue
-            res = apply_paper_trade(r, ticker=ticker, side=side, qty=qty, price=price, start_cash=settings.PAPER_START_CASH)
+            res = apply_paper_trade(
+                r,
+                ticker=ticker,
+                side=side,
+                qty=qty,
+                price=price,
+                start_cash=settings.PAPER_START_CASH,
+            )
             results.append("paper_trade OK" if res.get("ok") else f"paper_trade ERROR: {res.get('error')}")
             blob.setdefault("paper_trades", []).append(res)
             continue
-
 
         if act.get("name") == "alpaca_order":
             # Real order via Alpaca Trading API (still behind your approval gate)
             if settings.TRADING_BROKER.lower() != "alpaca":
                 results.append("alpaca_order DENIED: TRADING_BROKER is not alpaca")
-                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"broker_disabled"})
+                blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": "broker_disabled"})
                 continue
             # Prevent accidental live trades: require explicit confirmation flags
             broker_mode = (act.get("broker_mode") or ("paper" if settings.ALPACA_PAPER else "live")).lower()
-            if broker_mode not in ("paper","live"):
+            if broker_mode not in ("paper", "live"):
                 results.append("alpaca_order DENIED: broker_mode must be paper|live")
-                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"bad_broker_mode"})
+                blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": "bad_broker_mode"})
                 continue
             if broker_mode == "live":
                 if not act.get("confirm_live_trade"):
                     results.append("alpaca_order DENIED: missing confirm_live_trade=true")
-                    blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"live_not_confirmed"})
+                    blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": "live_not_confirmed"})
                     continue
                 # Also ensure env is configured for live or explicitly overridden
                 if settings.ALPACA_PAPER:
                     results.append("alpaca_order DENIED: ALPACA_PAPER=1 but broker_mode=live")
-                    blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"mode_mismatch"})
+                    blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": "mode_mismatch"})
                     continue
             if broker_mode == "paper" and not settings.ALPACA_PAPER:
                 results.append("alpaca_order DENIED: ALPACA_PAPER=0 but broker_mode=paper")
-                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":"mode_mismatch"})
+                blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": "mode_mismatch"})
                 continue
 
             from .brokers.alpaca import place_order, AlpacaError
+
             try:
                 order = place_order(
                     api_key=settings.ALPACA_API_KEY,
@@ -349,15 +417,20 @@ def execute(pending_id: str):
                     extended_hours=bool(act.get("extended_hours", False)),
                     client_order_id=act.get("client_order_id"),
                     order_class=act.get("order_class"),
-                    take_profit_limit_price=act.get("take_profit_limit_price") or (act.get("take_profit") or {}).get("limit_price"),
-                    stop_loss_stop_price=act.get("stop_loss_stop_price") or (act.get("stop_loss") or {}).get("stop_price"),
-                    stop_loss_limit_price=act.get("stop_loss_limit_price") or (act.get("stop_loss") or {}).get("limit_price"),
+                    take_profit_limit_price=act.get("take_profit_limit_price")
+                    or (act.get("take_profit") or {}).get("limit_price"),
+                    stop_loss_stop_price=act.get("stop_loss_stop_price")
+                    or (act.get("stop_loss") or {}).get("stop_price"),
+                    stop_loss_limit_price=act.get("stop_loss_limit_price")
+                    or (act.get("stop_loss") or {}).get("limit_price"),
                 )
-                results.append(f"alpaca_order OK id={order.get('id', '')} status={order.get('status', '')}")
+                results.append(
+                    f"alpaca_order OK id={order.get('id', '')} status={order.get('status', '')}"
+                )
                 blob.setdefault("alpaca_orders", []).append(order)
             except AlpacaError as e:
                 results.append(f"alpaca_order ERROR: {str(e)[:200]}")
-                blob.setdefault("trade_errors", []).append({"broker":"alpaca","error":str(e)})
+                blob.setdefault("trade_errors", []).append({"broker": "alpaca", "error": str(e)})
             continue
 
         results.append(execute_action(act))
@@ -367,6 +440,7 @@ def execute(pending_id: str):
     r.set(pending_id.encode(), json.dumps(blob).encode())
     telegram_send(f"Executed plan for {pending_id}:\n" + "\n".join(results))
     return {"ok": True, "results": results}
+
 
 @app.post("/inbound/twilio")
 async def inbound_twilio(request: Request):
@@ -387,7 +461,7 @@ async def inbound_twilio(request: Request):
         decision, code = parts[0], parts[1]
         for k in r.scan_iter(match=b"pending:*", count=500):
             blob = json.loads(r.get(k).decode())
-            if blob.get("approval_code","").upper() != code:
+            if blob.get("approval_code", "").upper() != code:
                 continue
             if blob["status"] != "WAITING_HUMAN":
                 break
@@ -409,7 +483,7 @@ async def inbound_twilio(request: Request):
     except Exception:
         twilio_send_sms(
             "Invalid format. Use: PLAN [RAGMODE] :: <request> | SHOT | TYPE: text | HOTKEY: ctrl+shift+p | CLICK: x,y",
-            from_number
+            from_number,
         )
         return {"ok": True}
 
@@ -429,15 +503,16 @@ async def inbound_twilio(request: Request):
     if status == "WAITING_HUMAN":
         twilio_send_sms(
             f"Council approved (pending human). Reply YES {code} or NO {code}. Pending: {pid}",
-            from_number
+            from_number,
         )
     else:
         twilio_send_sms(
             f"Council rejected. Pending: {pid}. You can query http://localhost:7070/status/{pid} locally for details.",
-            from_number
+            from_number,
         )
 
     return {"ok": True}
+
 
 @app.post("/approve/telegram")
 async def approve_telegram(request: Request):
@@ -495,7 +570,7 @@ def mcp_sync():
     snap = {
         "timestamp": time.time(),
         "tools": _mcp.list_tools(),
-        "allowlisted_tools": sorted(list(_mcp.allowlisted_tools))
+        "allowlisted_tools": sorted(list(_mcp.allowlisted_tools)),
     }
     r.set(b"mcp:tools_snapshot", json.dumps(snap, ensure_ascii=False).encode("utf-8"))
     return snap
@@ -504,6 +579,7 @@ def mcp_sync():
 # =====================
 # Optional SaaS endpoints
 # =====================
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -541,7 +617,11 @@ def saas_register(req: RegisterRequest):
         return {"error": "password must be >= 8 chars"}
     if get_user_by_email(email):
         return {"error": "user exists"}
-    u = create_user(email=email, password_hash=hash_password(req.password), created_at=int(time.time()))
+    u = create_user(
+        email=email,
+        password_hash=hash_password(req.password),
+        created_at=int(time.time()),
+    )
     token = create_jwt(email)
     return {"ok": True, "token": token, "user": {"email": u.get("email"), "plan": u.get("plan")}}
 
@@ -571,7 +651,14 @@ def saas_me(request: Request):
     u = get_user_by_email(email)
     if not u:
         return {"error": "not found"}
-    return {"ok": True, "user": {"email": u.get("email"), "plan": u.get("plan"), "created_at": u.get("created_at")}}
+    return {
+        "ok": True,
+        "user": {
+            "email": u.get("email"),
+            "plan": u.get("plan"),
+            "created_at": u.get("created_at"),
+        },
+    }
 
 
 @app.post("/saas/stripe/webhook")
