@@ -13,3 +13,12 @@ pillow==10.4.0
 feedparser==6.0.11
 twilio==9.3.0
 pystray==0.19.5
+
+# --- optional quant automation / dashboard / SaaS ---
+pandas==2.2.2
+yfinance==0.2.43
+pytrends==4.9.2
+praw==7.7.1
+streamlit==1.37.1
+PyJWT==2.9.0
+stripe==10.12.0
