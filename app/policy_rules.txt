@@ -8,6 +8,9 @@
 - Require human approval for any execution that changes files or controls the desktop.
 - If uncertain, default to NO.
 
+# Allowlist: notify-only plans are safe (no desktop/tool execution)
+- Plans with type=notify_only AND actions=[] are allowlisted and may be approved.
+
 # Desktop allowlist:
 # screenshot, move_mouse, click, type_text, hotkey
 - MCP tools are powerful external tools. Only call allowlisted MCP tools and require human approval.
