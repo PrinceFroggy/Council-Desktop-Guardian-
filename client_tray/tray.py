@@ -7,6 +7,10 @@ import rumps
 from flask import Flask, request, render_template_string
 import requests
 
+# Increase /plan timeout because a Council run can take longer than 15s
+# depending on model, RAG, and network.
+TRAY_PLAN_TIMEOUT_SECONDS = float(os.getenv("TRAY_PLAN_TIMEOUT_SECONDS", "120"))
+
 DEFAULT_API = "http://localhost:7070"
 
 DEFAULT_PLAN = {
@@ -174,7 +178,12 @@ class TrayWebUI:
             }
 
             try:
-                r = requests.post(self.api_base + "/plan", json=payload, headers={"X-Caller":"tray"}, timeout=300)
+                r = requests.post(
+                    self.api_base + "/plan",
+                    json=payload,
+                    headers={"X-Caller": "tray"},
+                    timeout=TRAY_PLAN_TIMEOUT_SECONDS,
+                )
                 r.raise_for_status()
                 data = r.json()
                 msg = (
