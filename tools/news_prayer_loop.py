@@ -1,28 +1,42 @@
-"""
+""" 
 News → Council → Telegram "Prayer" Loop
 
 Every N minutes:
 - Pulls latest headlines from NewsAPI
-- Packs them into an /plan request to your FastAPI server
-- Council reasons over the snippets
-- Telegram pings you with news + prediction + approval code (your server handles Telegram)
+- Extracts ticker candidates (strict patterns) and validates them via yfinance
+- Builds a cautious briefing prompt for Council
+- Sends /plan to your FastAPI server
+
+What you should expect:
+- Telegram message arrives with summary + tickers + BUY/SELL/PASS suggestion + approval code
+- If you reply YES <code>, the server executes the proposed plan:
+    - PASS (notify_only) -> no trade
+    - BUY/SELL -> paper_trade (default) or alpaca_order (if enabled)
 
 Run:
   python tools/news_prayer_loop.py
 
-Requires:
-  - FastAPI server running (uvicorn app.main:app --env-file .env)
-  - .env configured (NEWS_API_KEY, TELEGRAM_*, etc.)
+Env (minimum):
+  NEWS_API_KEY=...
+  TELEGRAM_* (in server .env)
+
+Optional (trading):
+  NEWS_TRADING_ENABLED=1
+  NEWS_TRADE_QTY=1
+  NEWS_BROKER=paper|alpaca
+  NEWS_BROKER_MODE=paper|live   (alpaca only)
+  ALPACA_* (in server .env)
+
+Notes:
+- This script only POSTS to /plan. Telegram messages are sent by the server.
 """
 
 import os
 import time
 import json
 import re
-import io
 import logging
 import warnings
-from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 
 import requests
@@ -32,12 +46,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # -----------------------------
-# Quiet noisy libs (yfinance / urllib3)
+# Quiet noisy libs
 # -----------------------------
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 
+# -----------------------------
+# ENV
+# -----------------------------
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "").strip()
 NEWS_QUERY = os.getenv(
     "NEWS_QUERY",
@@ -51,126 +68,115 @@ PLAN_ENDPOINT = os.getenv("PLAN_ENDPOINT", "http://localhost:7070/plan").strip()
 
 RAG_MODE = os.getenv("NEWS_RAG_MODE", os.getenv("RAG_MODE", "finetune")).strip()
 
-# Always keep this safe by default
-DRY_RUN = True
-
 SEEN_IDS_PATH = os.getenv("NEWS_SEEN_IDS_PATH", ".news_seen_ids.json").strip()
 MAX_SEEN = int(os.getenv("NEWS_MAX_SEEN", "300"))
 
-# ------------------------------------------------------------------
-# Ticker extraction (STRICT: only $TICKER, (TICKER), NASDAQ: TICKER, etc.)
-# ------------------------------------------------------------------
 
-TICKER_STOPWORDS = {
-    "A", "AN", "THE", "AND", "OR", "OF", "IN", "ON", "TO", "FOR", "WITH", "AT", "BY", "FROM",
-    "GET", "SET", "LOW", "HIGH", "COST", "YEAR", "SHOCK", "FLAGS", "BOOST", "SPORT", "NEW",
-    "Q", "Q1", "Q2", "Q3", "Q4", "FY", "EPS", "CEO", "CFO", "SEC", "USA", "EU", "UK",
-    "CHINA", "INDIA", "JAPAN", "KOREA", "EUROPE",
-}
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "y", "on"):
+        return True
+    if raw in ("0", "false", "no", "n", "off"):
+        return False
+    return default
 
-TICKER_PATTERNS = [
+
+DRY_RUN = _env_bool("NEWS_DRY_RUN", _env_bool("DRY_RUN", False))
+NEWS_TRADING_ENABLED = _env_bool("NEWS_TRADING_ENABLED", False)
+NEWS_BROKER = os.getenv("NEWS_BROKER", "paper").strip().lower()  # paper|alpaca
+NEWS_BROKER_MODE = os.getenv("NEWS_BROKER_MODE", "paper").strip().lower()  # paper|live (alpaca only)
+NEWS_TRADE_QTY = int(os.getenv("NEWS_TRADE_QTY", "1"))
+
+
+# -----------------------------
+# Strict ticker extraction
+# -----------------------------
+_TICKER_PATTERNS = [
     re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b"),  # $AAPL, $BRK.B
     re.compile(r"\(([A-Z]{1,5}(?:\.[A-Z])?)\)"),  # (AAPL)
-    re.compile(r"\b(?:NASDAQ|NYSE|AMEX)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b"),  # NASDAQ: AAPL
-    re.compile(r"\b(?:Ticker|Symbol)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b", re.IGNORECASE),  # Ticker: AAPL
+    re.compile(r"\b(?:NASDAQ|NYSE|AMEX)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b"),
+    re.compile(r"\b(?:Ticker|Symbol)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b", re.I),
     re.compile(r"\b(\d{4,6}\.[A-Z]{2})\b"),  # 005930.KS
     re.compile(r"\b([A-Z]{1,4}\.[A-Z]{1,3})\b"),  # SHOP.TO
 ]
 
 
-def _looks_plausible(sym: str) -> bool:
-    sym = sym.strip().upper()
-    if not sym:
-        return False
-    if sym in TICKER_STOPWORDS:
-        return False
-    if sym.count(".") > 1:
-        return False
-    if sym.endswith(".") or sym.startswith("."):
-        return False
-    # avoid very common 2-letter words that slip through
-    if sym in {"AS", "AT", "AM", "PM", "IT", "IS", "BE", "WE", "US"}:
-        return False
-    return True
-
-
 def extract_ticker_candidates(text: str) -> list[str]:
-    text_up = text.upper()
+    if not text:
+        return []
+    t = text.upper()
     found: list[str] = []
-
-    for rx in TICKER_PATTERNS:
-        found.extend(rx.findall(text_up))
-
-    # de-dupe, preserve order
-    out: list[str] = []
-    seen: set[str] = set()
-
-    for sym in found:
-        sym = sym.strip().upper()
-        if not _looks_plausible(sym):
+    for rx in _TICKER_PATTERNS:
+        found.extend(rx.findall(t))
+    # normalize + unique
+    seen = set()
+    out = []
+    for s in found:
+        s = (s or "").strip().upper()
+        if not s:
             continue
-        if sym not in seen:
-            seen.add(sym)
-            out.append(sym)
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out[:25]
 
+
+def validate_tickers(candidates: list[str], limit: int = 8) -> list[str]:
+    """Best-effort validation: keep tickers that yfinance recognizes."""
+    out: list[str] = []
+    for sym in candidates:
+        if len(out) >= limit:
+            break
+        try:
+            info = yf.Ticker(sym).fast_info
+            # fast_info can exist but be empty; check last_price/last_close if present
+            last = None
+            if isinstance(info, dict):
+                last = info.get("last_price") or info.get("lastClose") or info.get("last_close")
+            if last is not None:
+                out.append(sym)
+        except Exception:
+            continue
     return out
 
 
-def validate_tickers(cands: list[str], limit: int = 8) -> list[str]:
-    """
-    Validate tickers quietly (no console spam).
-    Uses yfinance history with stdout/stderr redirected.
-    """
-    valid: list[str] = []
-
-    for sym in cands:
-        if len(valid) >= limit:
-            break
-        if not _looks_plausible(sym):
-            continue
-
-        buf = io.StringIO()
-        try:
-            with redirect_stdout(buf), redirect_stderr(buf):
-                t = yf.Ticker(sym)
-                hist = t.history(period="5d", interval="1d")
-            if hist is not None and len(hist) > 0:
-                valid.append(sym)
-        except Exception:
-            pass
-
-    return valid
+def get_last_price(symbol: str) -> float | None:
+    try:
+        info = yf.Ticker(symbol).fast_info
+        if isinstance(info, dict):
+            v = info.get("last_price") or info.get("lastClose") or info.get("last_close")
+            if v is not None:
+                return float(v)
+    except Exception:
+        pass
+    return None
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-
-def _now_utc():
-    return datetime.now(timezone.utc)
-
+# -----------------------------
+# Seen IDs
+# -----------------------------
 
 def _load_seen() -> set[str]:
     try:
-        data = json.loads(open(SEEN_IDS_PATH, "r", encoding="utf-8").read())
-        return set(data if isinstance(data, list) else [])
+        return set(json.loads(open(SEEN_IDS_PATH).read()))
     except Exception:
         return set()
 
 
 def _save_seen(seen: set[str]) -> None:
     try:
-        lst = list(seen)[-MAX_SEEN:]
-        open(SEEN_IDS_PATH, "w", encoding="utf-8").write(
-            json.dumps(lst, ensure_ascii=False, indent=2)
-        )
+        open(SEEN_IDS_PATH, "w").write(json.dumps(list(seen)[-MAX_SEEN:], indent=2))
     except Exception:
         pass
 
 
-# ------------------------------------------------------------------
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# -----------------------------
 # News
-# ------------------------------------------------------------------
+# -----------------------------
 
 def fetch_news() -> list[dict]:
     if not NEWS_API_KEY:
@@ -220,93 +226,159 @@ def build_snippet_block(articles: list[dict]) -> tuple[str, list[str]]:
     return "\n\n".join(snippets), ids
 
 
-# ------------------------------------------------------------------
-# API
-# ------------------------------------------------------------------
+def simple_reco_from_text(text: str) -> str:
+    """Very basic heuristic so we always have *some* suggestion.
+    Council still makes the final call; this just prevents empty messages.
+    """
+    t = (text or "").lower()
+    sell_words = ["downgrade", "miss", "lawsuit", "fraud", "recall", "cuts", "layoff", "warn"]
+    buy_words = ["upgrade", "beats", "record", "raises guidance", "strong demand", "approval"]
 
-def call_plan(action_request: str) -> dict:
-    # IMPORTANT: make it clearly non-executing so council is less likely to reject
+    score = 0
+    for w in buy_words:
+        if w in t:
+            score += 1
+    for w in sell_words:
+        if w in t:
+            score -= 1
+
+    if score >= 1:
+        return "BUY"
+    if score <= -1:
+        return "SELL"
+    return "PASS"
+
+
+# -----------------------------
+# API
+# -----------------------------
+
+def call_plan(action_request: str, proposed_plan: dict) -> dict:
     payload = {
         "action_request": action_request,
-        "proposed_plan": {"type": "notify_only", "actions": []},  # <-- changed
+        "proposed_plan": proposed_plan,
         "rag_mode": RAG_MODE,
-        "dry_run": True,  # <-- forced true
+        "dry_run": DRY_RUN,
     }
 
-    resp = requests.post(PLAN_ENDPOINT, json=payload, headers={"X-Caller": "news_prayer_loop"}, timeout=300)
+    resp = requests.post(
+        PLAN_ENDPOINT,
+        json=payload,
+        headers={"X-Caller": "news_prayer_loop"},
+        timeout=300,
+    )
+
     resp.raise_for_status()
     return resp.json()
 
 
-# ------------------------------------------------------------------
+# -----------------------------
 # Main
-# ------------------------------------------------------------------
+# -----------------------------
 
 def main():
     seen = _load_seen()
+
     print(
         f"[news-prayer] endpoint={PLAN_ENDPOINT} interval={NEWS_POLL_INTERVAL_SECONDS}s rag_mode={RAG_MODE} dry_run={DRY_RUN}"
     )
     print(f"[news-prayer] query: {NEWS_QUERY}")
+    print(f"[news-prayer] trading_enabled={NEWS_TRADING_ENABLED} broker={NEWS_BROKER} broker_mode={NEWS_BROKER_MODE} qty={NEWS_TRADE_QTY}")
 
     while True:
         try:
             articles = fetch_news()
-            block, ids = build_snippet_block(articles)
 
+            # only consider fresh items
+            block, ids = build_snippet_block(articles)
             fresh = [(i, a) for i, a in zip(ids, articles) if i not in seen]
 
             if not fresh:
-                print(f"[{_now_utc().isoformat()}] No new headlines.")
-            else:
-                fresh_articles = [a for _, a in fresh]
-                fresh_block, fresh_ids = build_snippet_block(fresh_articles)
+                print(f"[{_now_utc()}] No new headlines.")
+                time.sleep(NEWS_POLL_INTERVAL_SECONDS)
+                continue
 
-                # Build a text blob from titles/descriptions to extract candidates
-                text_blob = " ".join(
-                    ((a.get("title") or "") + " " + (a.get("description") or "")).strip()
-                    for a in fresh_articles
-                )
+            fresh_articles = [a for _, a in fresh]
+            fresh_block, fresh_ids = build_snippet_block(fresh_articles)
 
-                candidates = extract_ticker_candidates(text_blob)
-                valid_tickers = validate_tickers(candidates, limit=8)
+            # Extract + validate tickers
+            text_blob = " ".join(
+                ((a.get("title") or "") + " " + (a.get("description") or "")).strip()
+                for a in fresh_articles
+            )
+            candidates = extract_ticker_candidates(text_blob)
+            valid_tickers = validate_tickers(candidates, limit=8)
+            tickers_line = ", ".join(valid_tickers) if valid_tickers else "(none detected)"
 
-                tickers_line = ", ".join(valid_tickers) if valid_tickers else ""
+            # Local heuristic
+            local_reco = simple_reco_from_text(text_blob)
 
-                # Keep prompt strict and JSON-only. Also: WATCH/PASS only to reduce council rejection.
-                prompt = f"""
-Create a cautious NEWS BRIEFING for a human.
+            # Ask Council for a human-readable briefing + BUY/SELL/PASS
+            action_request = (
+                "Create a cautious, neutral market news briefing for a human.\n"
+                "Include: (1) a 3–6 bullet summary, (2) relevant tickers, (3) a BUY/SELL/PASS suggestion with confidence (0–100) and why, "
+                "and (4) a clear 'not financial advice' disclaimer.\n\n"
+                f"Validated tickers (choose only from these, do not invent new tickers): {tickers_line}\n"
+                f"Local heuristic suggestion (for reference only): {local_reco}\n\n"
+                "News snippets:\n"
+                f"{fresh_block}"
+            )
 
-Constraints:
-- No trading, no orders, no “buy/sell” recommendations.
-- Only allow actions: WATCH or PASS.
-- Choose up to 3 tickers ONLY from this validated list (do not invent tickers): {tickers_line or "(none)"}
-- If the validated list is empty, do not suggest any tickers.
+            # Proposed plan
+            proposed_plan: dict = {"type": "notify_only", "actions": []}
 
-Include in your message:
-- 3–5 key headlines (very short)
-- The top ticker (if any) + WATCH/PASS + confidence (0–100)
-- Ask me to reply YES/NO if I want to continue monitoring.
+            if NEWS_TRADING_ENABLED and valid_tickers and local_reco in ("BUY", "SELL"):
+                sym = valid_tickers[0]
 
-News snippets:
-{fresh_block}
-""".strip()
+                if NEWS_BROKER == "alpaca":
+                    proposed_plan = {
+                        "type": "trading",
+                        "actions": [
+                            {
+                                "name": "alpaca_order",
+                                "symbol": sym,
+                                "side": "buy" if local_reco == "BUY" else "sell",
+                                "qty": NEWS_TRADE_QTY,
+                                "order_type": os.getenv("NEWS_ORDER_TYPE", "market"),
+                                "time_in_force": os.getenv("NEWS_TIME_IN_FORCE", "day"),
+                                "broker_mode": NEWS_BROKER_MODE,
+                                # live trades require explicit confirmation at approval time
+                                "confirm_live_trade": False,
+                            }
+                        ],
+                    }
+                else:
+                    # paper trading: include an approximate quote so execution can proceed
+                    px = get_last_price(sym) or 0.0
+                    proposed_plan = {
+                        "type": "trading",
+                        "actions": [
+                            {
+                                "name": "paper_trade",
+                                "ticker": sym,
+                                "side": "buy" if local_reco == "BUY" else "sell",
+                                "qty": NEWS_TRADE_QTY,
+                                "price": float(px),
+                                "requires_quote": False,
+                                "price_confirmed": True,
+                            }
+                        ],
+                    }
 
-                result = call_plan(prompt)
-                pending_id = result.get("pending_id")
-                status = result.get("status")
+            result = call_plan(action_request, proposed_plan)
+            pending_id = result.get("pending_id")
+            status = result.get("status")
 
-                print(
-                    f"[{_now_utc().isoformat()}] Sent /plan with {len(fresh_articles)} headlines "
-                    f"-> pending_id={pending_id} status={status}"
-                )
+            print(
+                f"[{_now_utc()}] Sent /plan with {len(fresh_articles)} headlines -> pending_id={pending_id} status={status}"
+            )
 
-                for fid in fresh_ids:
-                    seen.add(fid)
-                _save_seen(seen)
+            for fid in fresh_ids:
+                seen.add(fid)
+            _save_seen(seen)
 
         except Exception as e:
-            print(f"[{_now_utc().isoformat()}] ERROR: {e}")
+            print(f"[{_now_utc()}] ERROR: {e}")
 
         time.sleep(NEWS_POLL_INTERVAL_SECONDS)
 
