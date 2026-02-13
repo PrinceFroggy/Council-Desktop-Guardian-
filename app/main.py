@@ -34,6 +34,32 @@ load_dotenv()
 app = FastAPI()
 
 r = get_redis(settings.REDIS_URL)
+# ------------------------------------------------------------------
+# Outbound priority gating (Tray app wins)
+# When tray sends a prompt, temporarily suppress outbound Telegram
+# notifications from background schedulers so the tray message is
+# delivered "instantly" and doesn't get buried.
+# ------------------------------------------------------------------
+OUTBOUND_PAUSE_KEY = "outbound_pause_until"
+OUTBOUND_TRAY_PAUSE_SECONDS = int(os.getenv("OUTBOUND_TRAY_PAUSE_SECONDS", "12"))
+
+def _outbound_pause_active() -> bool:
+    try:
+        raw = r.get(OUTBOUND_PAUSE_KEY.encode())
+        if not raw:
+            return False
+        until = float(raw.decode())
+        return time.time() < until
+    except Exception:
+        return False
+
+def _outbound_pause_set() -> None:
+    try:
+        until = time.time() + float(OUTBOUND_TRAY_PAUSE_SECONDS)
+        # store until timestamp; TTL slightly longer as safety
+        r.set(OUTBOUND_PAUSE_KEY.encode(), str(until).encode(), ex=max(OUTBOUND_TRAY_PAUSE_SECONDS + 5, 10))
+    except Exception:
+        pass
 providers = load_providers()
 rag = RAG(r)
 ensure_vector_index(r, rag.dim)
@@ -47,10 +73,17 @@ except Exception:
     pass
 
 # Start daily research + reflection (Telegram)
+# NOTE: Don't swallow startup errors silently—if the scheduler fails to start,
+# it can look like "news is paused" even though the server is running.
 try:
     start_scheduler(rag, r, providers, council)
-except Exception:
-    pass
+    print("[scheduler] started")
+except Exception as ex:
+    print(f"[scheduler] FAILED to start: {ex}")
+    try:
+        telegram_send(f"[scheduler] FAILED to start: {ex}")
+    except Exception:
+        pass
 
 # init SaaS DB (safe no-op if SAAS_ENABLED=0)
 try:
@@ -69,7 +102,43 @@ class PlanRequest(BaseModel):
     action_request: str
     proposed_plan: dict
     rag_mode: str = "naive"  # naive|advanced|graphrag|agentic|finetune|cag
+    dry_run: bool = False
     # {"type":"desktop","actions":[...]} etc.
+
+
+# ------------------------------------------------------------------
+# Tray fast-path
+#
+# The tray UI is explicitly user-operated on the same machine.
+# Waiting for multi-pass Council review can make the UI feel "stuck".
+#
+# When enabled, and ONLY when the tray proposes a *safe* desktop plan
+# (no shell/fs/web fetch), we skip Council and immediately return a
+# WAITING_HUMAN pending item with a Telegram/SMS approval code.
+#
+# This makes the tray feel instant while keeping execution gated.
+# ------------------------------------------------------------------
+TRAY_FASTPATH_ENABLED = os.getenv("TRAY_FASTPATH_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Keep this conservative. Add more only if you are comfortable.
+TRAY_SAFE_ACTIONS = {"screenshot", "move_mouse", "click", "type_text", "hotkey"}
+
+
+def _is_tray_safe_plan(plan: dict) -> bool:
+    if not isinstance(plan, dict):
+        return False
+    if (plan.get("type") or "desktop") != "desktop":
+        return False
+    actions = plan.get("actions") or []
+    if not isinstance(actions, list):
+        return False
+    for act in actions:
+        if not isinstance(act, dict):
+            return False
+        name = act.get("name")
+        if name not in TRAY_SAFE_ACTIONS:
+            return False
+    return True
 
 
 def _preview_actions(plan: dict) -> list[str]:
@@ -125,113 +194,213 @@ def index():
 
 @app.post("/plan")
 def plan(req: PlanRequest, request: Request):
-    ctx_obj = get_context(
-        rag, r, providers["ollama"], "llama3.1:8b", req.action_request, req.rag_mode
-    )
-    # normalize to list of chunks for council (best effort)
-    ctx = ctx_obj.get("chunks") or []
-    if not ctx and ctx_obj.get("mode") == "agentic":
-        # flatten agentic bundles
-        for b in ctx_obj.get("bundles", []):
-            ctx.extend(b.get("chunks", []))
-    if ctx_obj.get("mode") == "cag" and ctx_obj.get("cached"):
-        # if cached council response exists, return it directly
-        return ctx_obj["cached"]
+    caller = "unknown"
+    try:
+        caller = request.headers.get("X-Caller", "unknown")
+    except Exception:
+        pass
 
-    provider_plan = [
-        ("ollama", "qwen2.5-coder:7b"),
-        ("ollama", "llama3.1:8b"),
-        ("ollama", "qwen2.5-coder:7b"),
-        ("ollama", "llama3.1:8b"),
-    ]
+    caller_l = (caller or "unknown").lower()
+    tray_callers = ("tray", "tray_app", "council_tray", "trayapp")
 
-    verdict = council.review(
-        action_request=req.action_request,
-        rag_context=ctx,
-        proposed_plan=req.proposed_plan,
-        provider_plan=provider_plan,
-    )
+    # Suppress background outbound messages briefly when tray is active.
+    suppress_telegram = _outbound_pause_active() and (caller_l not in tray_callers)
 
+    # ------------------------------------------------------------------
+    # Tray fast-path: return immediately for safe desktop plans.
+    # ------------------------------------------------------------------
+    if caller_l in tray_callers and TRAY_FASTPATH_ENABLED:
+        if _is_tray_safe_plan(req.proposed_plan):
+            pending_id = f"pending:{int(time.time())}:{uuid.uuid4().hex[:6]}"
+            code = _approval_code()
+            verdict = {
+                "final": {
+                    "verdict": "YES",
+                    "reasons": [
+                        "tray fast-path: safe desktop plan (no shell/fs/web fetch)",
+                        "execution remains gated behind human approval",
+                    ],
+                    "message_to_human": "Fast-path used: Council review skipped to keep the tray snappy. Review the planned actions below and approve only if it looks right.",
+                },
+                "reviews": [],
+            }
+
+            blob = {
+                "pending_id": pending_id,
+                "approval_code": code,
+                "created_at": time.time(),
+                "status": "DRY_RUN" if bool(req.dry_run) else "WAITING_HUMAN",
+                "rag": {"mode": "tray_fastpath", "chunks": []},
+                "verdict": verdict,
+                "proposed_plan": req.proposed_plan,
+                "dry_run": bool(req.dry_run),
+                "execution_preview": _preview_actions(req.proposed_plan),
+                "action_request": req.action_request,
+            }
+            r.set(pending_id.encode(), json.dumps(blob).encode())
+
+            # Tray gets outbound priority
+            _outbound_pause_set()
+
+            preview = "\n".join(blob.get("execution_preview") or []) or "(no actions)"
+            msg = verdict["final"].get("message_to_human") or ""
+
+            if not suppress_telegram:
+                if blob["status"] == "WAITING_HUMAN":
+                    telegram_send(
+                        f"[{caller}] Pending approval (tray fast-path).\n"
+                        f"Approval code: {code}\n"
+                        f"Pending: {pending_id}\n\n"
+                        f"{msg}\n\n"
+                        f"Planned actions:\n{preview}\n\n"
+                        f"Reply: YES {code} or NO {code}"
+                    )
+                else:
+                    telegram_send(
+                        f"[{caller}] Dry run preview (tray fast-path).\n"
+                        f"Pending: {pending_id}\n\n"
+                        f"{msg}\n\n"
+                        f"Planned actions:\n{preview}"
+                    )
+
+            return {
+                "pending_id": pending_id,
+                "status": blob["status"],
+                "approval_code": code,
+                "verdict": verdict,
+                "execution_preview": blob.get("execution_preview"),
+            }
+
+    # ------------------------------------------------------------------
+    # Normal Council review path
+    # ------------------------------------------------------------------
     pending_id = f"pending:{int(time.time())}:{uuid.uuid4().hex[:6]}"
     code = _approval_code()
+
+    # Pick provider/model plan (simple default: Ollama for all passes)
+    model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+    provider_plan = [("ollama", model), ("ollama", model), ("ollama", model), ("ollama", model)]
+
+    # Build RAG context
+    llm_provider = providers.get("ollama")
+    ctx = get_context(rag, r, llm_provider, model, req.action_request, req.rag_mode)
+
+    def _extract_chunks(c: dict) -> list:
+        if not isinstance(c, dict):
+            return []
+        if "chunks" in c and isinstance(c.get("chunks"), list):
+            return c.get("chunks") or []
+        # agentic mode bundles
+        if "bundles" in c and isinstance(c.get("bundles"), list):
+            out = []
+            for b in c.get("bundles") or []:
+                out.extend((b or {}).get("chunks") or [])
+            return out
+        # graphrag mode: chunks + graph
+        if "graph" in c and isinstance(c.get("chunks"), list):
+            return c.get("chunks") or []
+        # finetune style overlay: no chunks
+        if c.get("mode") == "finetune":
+            return []
+        # cag mode: context lives at ["context"]
+        if c.get("mode") == "cag":
+            inner = c.get("context") or {}
+            if isinstance(inner, dict):
+                return _extract_chunks(inner)
+        return []
+
+    rag_chunks = _extract_chunks(ctx)
+
+    # CAG cache hit: reuse stored verdict object
+    verdict = None
+    if isinstance(ctx, dict) and ctx.get("mode") == "cag" and ctx.get("cache_hit") and ctx.get("cached"):
+        verdict = ctx.get("cached")
+
+    if verdict is None:
+        verdict = council.review(
+            action_request=req.action_request,
+            rag_context=rag_chunks,
+            proposed_plan=req.proposed_plan,
+            provider_plan=provider_plan,
+        )
+        # store to CAG cache if enabled
+        if isinstance(ctx, dict) and ctx.get("mode") == "cag":
+            try:
+                cag_set(r, prompt=req.action_request, rag_mode="cag", response_obj=verdict)
+            except Exception:
+                pass
+
+    final = (verdict or {}).get("final") or {}
+    final_verdict = str(final.get("verdict", "NO")).strip().upper()
+
+    status = "REJECTED_BY_COUNCIL"
+    if final_verdict == "YES":
+        status = "DRY_RUN" if bool(req.dry_run) else "WAITING_HUMAN"
 
     blob = {
         "pending_id": pending_id,
         "approval_code": code,
         "created_at": time.time(),
-        "status": (
-            "DRY_RUN"
-            if (
-                bool(getattr(req, "dry_run", False))
-                and verdict["final"].get("verdict") == "YES"
-            )
-            else (
-                "WAITING_HUMAN"
-                if verdict["final"].get("verdict") == "YES"
-                else "REJECTED_BY_COUNCIL"
-            )
-        ),
-        "rag": ctx_obj,
+        "status": status,
+        "rag": ctx,
         "verdict": verdict,
         "proposed_plan": req.proposed_plan,
-        "dry_run": bool(getattr(req, "dry_run", False)),
+        "dry_run": bool(req.dry_run),
         "execution_preview": _preview_actions(req.proposed_plan),
         "action_request": req.action_request,
     }
     r.set(pending_id.encode(), json.dumps(blob).encode())
 
-    if req.rag_mode.lower() == "cag":
-        # cache the full response object (so repeated prompts behave consistently)
+    # Telegram notification for review results
+    if status == "WAITING_HUMAN":
+        msg = final.get("message_to_human") or json.dumps(final, ensure_ascii=False)
+
+        # Always attach a trimmed copy of original news snippets + derived trade line for news callers.
+        news_context = ""
+        trade_line = ""
         try:
-            cag_set(
-                r,
-                prompt=req.action_request,
-                rag_mode="cag",
-                response_obj={
-                    "pending_id": pending_id,
-                    "status": blob["status"],
-                    "approval_code": code,
-                    "verdict": verdict,
-                    "rag": ctx_obj,
-                },
-            )
+            if caller_l in ("news_prayer_loop", "scheduler", "news"):
+                ar = (req.action_request or "").strip()
+                if ar:
+                    news_context = "\n\n--- News context ---\n" + ar[-2500:]
+
+                pp = req.proposed_plan or {}
+                if (pp.get("type") == "trading") and (pp.get("actions") or []):
+                    a0 = (pp.get("actions") or [])[0] or {}
+                    sym = a0.get("symbol") or a0.get("ticker") or "?"
+                    side = (a0.get("side") or "").upper() or "BUY/SELL"
+                    qty = a0.get("qty", "?")
+                    mode = a0.get("broker_mode") or a0.get("name") or "paper"
+                    trade_line = f"\n\nProposed trade: {side} {qty} {sym} ({mode})"
+                else:
+                    trade_line = "\n\nProposed trade: PASS (no order)"
         except Exception:
             pass
 
-    caller = "unknown"
-    try:
-        # If you later add Request injection, you'll read headers.
-        # For now, caller stays "unknown".
-        caller = request.headers.get("X-Caller", "unknown")
-    except Exception:
-        pass
+        if not suppress_telegram:
+            text_to_send = (
+                f"[{caller}] Council approved (pending human).\n"
+                f"Approval code: {code}\n"
+                f"Pending: {pending_id}\n"
+                f"{trade_line}\n\n"
+                f"{msg}"
+                f"{news_context}\n\n"
+                f"Reply: YES {code} or NO {code}"
+            )
+            telegram_send(text_to_send)
 
-    if blob["status"] == "WAITING_HUMAN":
-        msg = verdict["final"].get("message_to_human") or json.dumps(
-            verdict["final"], ensure_ascii=False
-        )
-        telegram_send(
-            f"[{caller}] Council approved (pending human).\n"
-            f"Approval code: {code}\n"
-            f"Pending: {pending_id}\n\n"
-            f"{msg}\n\n"
-            f"Reply: YES {code} or NO {code}"
-        )
-
-    elif blob["status"] == "DRY_RUN":
+    elif status == "DRY_RUN":
         preview = "\n".join(blob.get("execution_preview") or []) or "(no actions)"
-        msg = verdict["final"].get("message_to_human") or ""
-        telegram_send(
-            f"[{caller}] Dry run preview (no execution).\n"
-            f"Pending: {pending_id}\n\n"
-            f"{msg}\n\n"
-            f"Planned actions:\n{preview}\n\n"
-            f"If you want to execute, resend with dry_run=false."
-        )
+        msg = final.get("message_to_human") or ""
+        if not suppress_telegram:
+            telegram_send(
+                f"[{caller}] Dry run preview (no execution).\n"
+                f"Pending: {pending_id}\n\n"
+                f"{msg}\n\n"
+                f"Planned actions:\n{preview}"
+            )
 
-    elif blob["status"] == "REJECTED_BY_COUNCIL":
-        # NEW: Send rejection details to Telegram so you see why it failed.
-        final = verdict.get("final") or {}
+    elif status == "REJECTED_BY_COUNCIL":
         reasons = final.get("reasons") or []
         required = final.get("required_changes") or []
         msg = final.get("message_to_human") or ""
@@ -239,14 +408,15 @@ def plan(req: PlanRequest, request: Request):
         reasons_txt = "\n".join([f"- {r}" for r in reasons]) or "(no reasons)"
         required_txt = "\n".join([f"- {r}" for r in required]) or "(none)"
 
-        telegram_send(
-            f"[{caller}] Council REJECTED the request.\n"
-            f"Pending: {pending_id}\n"
-            f"Approval code: {code}\n\n"
-            f"Reasons:\n{reasons_txt}\n\n"
-            f"Required changes:\n{required_txt}\n\n"
-            f"{msg}"
-        )
+        if not suppress_telegram:
+            telegram_send(
+                f"[{caller}] Council REJECTED the request.\n"
+                f"Pending: {pending_id}\n"
+                f"Approval code: {code}\n\n"
+                f"Reasons:\n{reasons_txt}\n\n"
+                f"Required changes:\n{required_txt}\n\n"
+                f"{msg}"
+            )
 
     return {
         "pending_id": pending_id,
@@ -255,14 +425,40 @@ def plan(req: PlanRequest, request: Request):
         "verdict": verdict,
         "execution_preview": blob.get("execution_preview"),
     }
-
-
 @app.get("/status/{pending_id}")
 def status(pending_id: str):
     data = r.get(pending_id.encode())
     if not data:
         return {"error": "not found"}
     return json.loads(data.decode())
+
+
+@app.get("/status/scheduler")
+def scheduler_status():
+    """Lightweight heartbeat/status for background threads."""
+    def _get(key: str):
+        try:
+            v = r.get(key.encode())
+            return v.decode() if v else None
+        except Exception:
+            return None
+
+    return {
+        "news": {
+            "last_poll": _get("scheduler:news:last_poll"),
+            "last_item": _get("scheduler:news:last_item"),
+            "last_submit": _get("scheduler:news:last_submit"),
+            "last_error": _get("scheduler:news:last_error"),
+        },
+        "daily": {
+            "last_run": _get("scheduler:daily:last_run"),
+            "last_error": _get("scheduler:daily:last_error"),
+        },
+        "autopilot": {
+            "last_run": _get("scheduler:autopilot:last_run"),
+            "last_error": _get("scheduler:autopilot:last_error"),
+        },
+    }
 
 def _unwrap_plan(blob: dict) -> dict:
     plan = blob.get("proposed_plan") or {}
@@ -288,13 +484,17 @@ def execute(pending_id: str):
         return {"error": f"not approved (status={blob['status']})"}
 
     plan = _unwrap_plan(blob)
-
-    plan = blob.get("proposed_plan") or {}
     plan_type = plan.get("type") or "desktop"
-    if plan_type not in ("desktop", "trading"):
+    if plan_type not in ("desktop", "trading", "notify_only"):
         blob["status"] = "DENIED"
         r.set(pending_id.encode(), json.dumps(blob).encode())
         return {"error": f"Unsupported plan type: {plan_type}"}
+
+    # "notify_only" plans are informational (no actions). Mark executed.
+    if plan_type == "notify_only":
+        blob["status"] = "EXECUTED"
+        r.set(pending_id.encode(), json.dumps(blob).encode())
+        return {"ok": True, "results": [], "note": "notify_only: no actions"}
 
     results = []
     for act in plan.get("actions", []):
@@ -554,7 +754,12 @@ async def approve_telegram(request: Request):
             blob["status"] = "APPROVED"
             r.set(k, json.dumps(blob).encode())
             telegram_send(f"Approved. Executing: {blob['pending_id']}")
-            execute(blob["pending_id"])
+            res = execute(blob["pending_id"])
+            try:
+                if isinstance(res, dict) and res.get("error"):
+                    telegram_send(f"Execute failed for {blob['pending_id']}: {res['error']}")
+            except Exception:
+                pass
         elif decision == "NO":
             blob["status"] = "DENIED"
             r.set(k, json.dumps(blob).encode())

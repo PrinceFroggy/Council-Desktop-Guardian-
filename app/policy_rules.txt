@@ -34,3 +34,23 @@ REQUIRE HUMAN APPROVAL if:
 - MCP tools are powerful external tools. Only call allowlisted MCP tools and require human approval.
 - shell_exec/fs_read/fs_write/web_fetch are disabled unless ENABLE_* env vars are set; require human approval.
 
+
+
+# === EXECUTION / APPROVAL MODEL (IMPORTANT) ===
+# The server will NEVER execute a YES plan immediately.
+# - If Council verdict is YES, the server sets status=WAITING_HUMAN and requires the user to reply YES <CODE>.
+# - Only after explicit human approval will /execute run actions.
+# Reviewers should NOT reject a plan solely because it contains allowlisted desktop/tool actions;
+# instead, recommend YES when safe and note that explicit approval is required.
+
+# === TRAY DEFAULT SCREENSHOT ALLOWLIST (HUMAN APPROVAL REQUIRED) ===
+# Allow the tray's default screenshot capture plan. It's a benign, reversible, local action.
+ALLOW if:
+- proposed_plan.type == "desktop"
+- all proposed_plan.actions are screenshot only
+- screenshot path is a normal local filename (no hidden system paths)
+- requires explicit human approval (YES/NO code) before execution
+
+# === NEUTRAL APPROVAL WORDING ===
+# Asking for a YES/NO reply with an approval code is allowed when phrased neutrally and without urgency or pressure.
+# Do not label it as persuasion unless the text pressures the user (e.g., "act now", "urgent", "must").

@@ -12,7 +12,17 @@ from .notify import telegram_send
 from .engine import submit_request
 from .autopilot import run_autopilot_once
 
-_TICKER_RE = re.compile(r"(?:\$|\b)([A-Z]{1,5})(?:\b)")
+# Strict ticker extraction: only accept explicitly marked tickers (e.g. $AAPL, (AAPL), NASDAQ: AAPL).
+# This avoids treating common words like "MOST" or "FIRMS" as tickers.
+_TICKER_PATTERNS = [
+    re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b"),  # $AAPL, $BRK.B
+    re.compile(r"\(([A-Z]{1,5}(?:\.[A-Z])?)\)"),  # (AAPL)
+    re.compile(r"\b(?:NASDAQ|NYSE|AMEX)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b"),
+    re.compile(r"\b(?:Ticker|Symbol)\s*:\s*([A-Z]{1,5}(?:\.[A-Z])?)\b", re.I),
+    re.compile(r"\b(\d{4,6}\.[A-Z]{2})\b"),       # 005930.KS
+    re.compile(r"\b([A-Z]{1,4}\.[A-Z]{1,3})\b"),   # SHOP.TO
+]
+
 
 def load_sources() -> list[str]:
     """Daily briefing RSS sources."""
@@ -51,24 +61,30 @@ def load_news_sources() -> list[str]:
     return out
 
 def _extract_tickers(text: str) -> list[str]:
+    """
+    Best-effort ticker extraction that avoids false positives.
+    Only returns tickers when they're explicitly marked in the text.
+    """
     if not text:
         return []
-    cands = _TICKER_RE.findall(text.upper())
-    # filter obvious noise tokens
-    bad = {"THE","AND","FOR","WITH","THIS","THAT","FROM","WILL","ARE","YOU","NOW","NEW","USA","CAN","USD","CEO","CFO","IPO","ETF","FED"}
-    out = []
-    for t in cands:
-        if t in bad:
-            continue
-        if 1 <= len(t) <= 5:
-            out.append(t)
+    text_up = text.upper()
+
+    found: list[str] = []
+    for rx in _TICKER_PATTERNS:
+        found.extend(rx.findall(text_up))
+
     # de-dup keep order
-    seen=set()
-    uniq=[]
-    for t in out:
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in found:
+        t = (t or "").strip().upper()
+        if not t:
+            continue
         if t not in seen:
-            seen.add(t); uniq.append(t)
-    return uniq[:10]
+            seen.add(t)
+            out.append(t)
+
+    return out[:10]
 
 def _in_market_hours(dt: datetime.datetime) -> bool:
     # Basic US market hours heuristic, local time.
@@ -93,6 +109,14 @@ def run_daily_briefing(llm_provider, model_name: str):
 
     text = llm_provider.chat(DAILY_RESEARCH_SYSTEM, prompt, model_name)
     telegram_send(text)
+
+
+def _set_heartbeat(r, key: str, value: str) -> None:
+    """Best-effort status breadcrumbs for debugging background threads."""
+    try:
+        r.set(key.encode(), value.encode(), ex=60 * 60 * 24)
+    except Exception:
+        pass
 
 def _news_to_proposed_plan(provider, model_name: str, article: dict) -> dict:
     title = article.get("title","")
@@ -198,15 +222,24 @@ def start_scheduler(rag, r, providers, council):
             if target <= now:
                 target = target + datetime.timedelta(days=1)
             time.sleep(max(5, (target - now).total_seconds()))
-            run_daily_briefing(providers["ollama"], "llama3.1:8b")
+            try:
+                _set_heartbeat(r, "scheduler:daily:last_run", now.isoformat())
+                run_daily_briefing(providers["ollama"], "llama3.1:8b")
+            except Exception as ex:
+                _set_heartbeat(r, "scheduler:daily:last_error", str(ex))
 
     def news_loop():
-        sources = load_news_sources()
-        if not sources:
-            return
         while True:
             try:
+                # Reload sources each cycle so edits to news_sources.txt take effect
+                sources = load_news_sources()
+                if not sources:
+                    _set_heartbeat(r, "scheduler:news:last_error", "No news sources configured (NEWS_SOURCES_FILE empty/unreadable)")
+                    time.sleep(max(60, settings.NEWS_POLL_INTERVAL_SECONDS))
+                    continue
+
                 now = datetime.datetime.now()
+                _set_heartbeat(r, "scheduler:news:last_poll", now.isoformat())
                 if settings.NEWS_ENABLE_MARKET_HOURS_ONLY and not _in_market_hours(now):
                     time.sleep(max(30, settings.NEWS_POLL_INTERVAL_SECONDS))
                     continue
@@ -224,6 +257,7 @@ def start_scheduler(rag, r, providers, council):
                         r.setex(seen_key, 60*60*24*7, b"1")  # 7 days
 
                         article = {"title": title, "link": link, "summary": summary}
+                        _set_heartbeat(r, "scheduler:news:last_item", title[:200])
 
                         # index into RAG for later Q&A
                         try:
@@ -243,9 +277,11 @@ def start_scheduler(rag, r, providers, council):
                             proposed_plan=proposed_plan,
                             rag_mode="advanced"
                         )
+                        _set_heartbeat(r, "scheduler:news:last_submit", f"{key}:{title[:120]}")
 
                 time.sleep(max(30, settings.NEWS_POLL_INTERVAL_SECONDS))
             except Exception as ex:
+                _set_heartbeat(r, "scheduler:news:last_error", str(ex))
                 try:
                     telegram_send(f"[NewsPoller] error: {ex}")
                 except Exception:
@@ -261,8 +297,10 @@ def start_scheduler(rag, r, providers, council):
             return
         while True:
             try:
+                _set_heartbeat(r, "scheduler:autopilot:last_run", datetime.datetime.now().isoformat())
                 run_autopilot_once(r, council=council)
             except Exception as ex:
+                _set_heartbeat(r, "scheduler:autopilot:last_error", str(ex))
                 try:
                     telegram_send(f"[Autopilot] error: {ex}")
                 except Exception:
